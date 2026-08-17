@@ -107,19 +107,30 @@ The script is running and found the DOI, but it could not reach Zotero. Check in
 1. **Is Zotero running?** `curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:23119/api/users/0/items/top?limit=1'` must print `200`. If it prints nothing, start Zotero; if it prints `404`, enable *Settings → Advanced → Allow other applications on this computer to communicate with Zotero*.
 2. **Open the browser console** (F12) on the article page and reload. A line beginning `[zotdot]` names the failure.
 
-### `[zotdot] Zotero unreachable: network refused …` on Chromium 151+ / Brave
+### `[zotdot] Zotero unreachable: network refused …`
 
-Chromium 151 gates requests to loopback and private addresses behind a **Local Network Access** permission, granted **per page origin**. The grant lives in the browser profile as a `local_network` content setting — a granted entry looks like `"https://example.com:443,*": {"setting": 1}`. A publisher page you have never granted has no entry, so the request is refused, and because the request originates in the extension rather than the page, **no permission prompt is shown** — it just fails silently.
+**Zotero's local API deliberately refuses browsers.** Measured against Zotero 9.0.6, its HTTP server drops the connection (empty reply, no status line) for:
 
-Zotero's local API sends no `Access-Control-Allow-*` headers, so a page-context `fetch` is not an alternative; `GM_xmlhttpRequest` is the only route, which is why this gate is load-bearing.
+| Request | Result |
+|---|---|
+| no `Origin`, plain User-Agent | **200** |
+| **any** `Origin` header — including empty, `null`, `http://127.0.0.1:23119`, `https://www.zotero.org` | dropped |
+| `User-Agent` containing `Mozilla/` — even with no `Origin` | dropped |
+| `User-Agent: Chrome/151`, `python-requests/2.31`, `zotdot/0.1` | 200 |
+| `Referer` or `X-Requested-With`, no `Origin` | 200 |
 
-Options, best first:
+This is an anti-DNS-rebinding defence, not a bug: it stops any web page from talking to your library. It also means the client must simply **not look like a browser**, which is why zotdot sends `User-Agent: zotdot/0.1` and `anonymous: true` on every request. Violentmonkey can rewrite those restricted headers because it holds `webRequest` and `declarativeNetRequestWithHostAccess` permissions.
 
-- **Turn the check off globally.** `brave://flags` (or `chrome://flags`) → search *local network* → set the Local Network Access check to **Disabled** → relaunch. One switch, reversible, and it covers every publisher rather than needing a grant per site.
-- **Grant per origin.** `brave://settings/content` → *Local network access* (naming varies by build) → allow the publisher origin. Correct but untenable in practice: you would repeat it for every journal you visit.
-- **Use Firefox instead.** Firefox does not implement this gate. Install Violentmonkey there and the script works unchanged.
+Note that Zotero answers `OPTIONS` with `200` and **no** `Access-Control-Allow-Origin` header — it grants CORS to nobody, so a page-context `fetch` can never work regardless.
 
-If the console still reports a refusal after disabling the flag, the error message now includes the manager's own fields (`error=`, `status=`, `statusText=`). `ERR_BLOCKED_BY_CLIENT` points at an adblock/Shields rule rather than the permission gate; `ERR_CONNECTION_REFUSED` means nothing is listening on 23119.
+If the console still reports a refusal after this, the userscript manager is attaching an `Origin` header that cannot be suppressed from script. Fallbacks, best first:
+
+- **Try Firefox** with Violentmonkey — a different manager build may not add `Origin`.
+- **Run a tiny loopback relay** that accepts browser requests and forwards them to Zotero with the headers stripped. This reintroduces a background process, which v1 deliberately avoided.
+
+### Not the cause: Local Network Access
+
+Chromium 151 does gate loopback behind a per-origin Local Network Access permission (visible in the browser profile as a `local_network` content setting), and `brave://flags#local-network-access-check` disables it globally. On this setup that was **not** the blocker — disabling it changed nothing, and the real cause was the header filtering above. Rule it out quickly rather than dwelling on it.
 
 ## Not in v1
 

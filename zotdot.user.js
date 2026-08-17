@@ -39,6 +39,8 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
+  // Must NOT contain "Mozilla/" — see the note in gm.request().
+  const UA = 'zotdot/0.1 (local Zotero client)';
   // Bumped to 2 when meta gained `complete`. A v1 cache has no completeness
   // evidence, so it is discarded and rebuilt rather than trusted for red dots.
   const CACHE_VERSION = 2;
@@ -110,8 +112,9 @@
     }
     const detail = bits.length ? bits.join(' ') : 'no detail from the userscript manager';
     return `network refused (${detail}) — target ${API}. `
-      + 'On Chromium 151+/Brave this is usually the Local Network Access gate: the '
-      + "page's origin has no localhost grant. See README troubleshooting.";
+      + 'Zotero drops any request carrying an Origin header or a "Mozilla/" User-Agent. '
+      + 'If this persists, the userscript manager is adding an Origin header that cannot '
+      + 'be suppressed — see README troubleshooting.';
   }
 
   const gm = {
@@ -133,12 +136,20 @@
         fn({
           method: 'GET',
           timeout: 20000,
+          // Zotero's local API is deliberately non-browser-only: it drops the
+          // connection outright for any request carrying an `Origin` header, and
+          // for any request whose User-Agent contains "Mozilla/". Measured against
+          // Zotero 9.0.6 — `curl` with no Origin and a plain UA gets 200, the same
+          // request with `-A "Mozilla/5.0"` gets an empty reply. This is an
+          // anti-DNS-rebinding defence, not a bug, so the client must simply not
+          // look like a browser. Violentmonkey can rewrite these restricted
+          // headers because it holds webRequest/declarativeNetRequest permissions.
+          anonymous: true,
           ...opts,
+          headers: { 'User-Agent': UA, ...(opts.headers || {}) },
           onload: (r) => resolve(r),
-          // A bare "network" says nothing about WHY. Browsers refuse loopback for
-          // several unrelated reasons — a Local Network Access permission the
-          // origin lacks, an adblock/Shields rule, or nothing listening — and the
-          // distinction decides the fix. Surface whatever the manager hands back.
+          // A bare "network" says nothing about WHY. Surface whatever fields the
+          // userscript manager hands back so the next failure names itself.
           onerror: (r) => reject(new Error(describeNetworkError(r))),
           ontimeout: () => reject(new Error('timeout — Zotero did not answer within 20s')),
         });
