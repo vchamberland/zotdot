@@ -60,6 +60,14 @@ Membership then becomes an in-memory set lookup. Painting a dot costs zero netwo
 
 Grey exists because a red dot while Zotero is closed would assert "you don't have this paper" when the truth is "I can't know." Hover any dot for its state, the matched Zotero key, and how old the index is.
 
+## Where the dot goes
+
+On an **article page**, the dot is placed on the **article title** whenever the page states a paper identity (`citation_doi` or `citation_title`), *and* next to any visible DOI. The title is the anchor that always works: on BMC and Springer the only visible DOI sits in a citation block at the very bottom of the article, where a dot answers the question long after you have scrolled past asking it.
+
+The title element is located by publisher class first — `h1.c-article-title` (BMC/Springer), `h1[data-test="article-title"]`, `h1.citation__title` (ACS), `h1.article-title` (HighWire), `h1#screen-reader-main-title` (ScienceDirect), `h1.title-text` (Wiley) — falling back to a bare `h1`. The ordering matters: a bare `h1` on some publishers is the journal name or a site banner, not the paper.
+
+On a **results page**, each row gets exactly one dot and the title-level rule does not apply.
+
 ## Where the DOI comes from
 
 Tried in order, based on a survey of Nature, PLOS, Frontiers, bioRxiv, eNeuro and arXiv article pages:

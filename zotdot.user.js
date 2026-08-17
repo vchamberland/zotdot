@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.1.0
+// @version      0.2.0
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @match        *://*/*
@@ -390,6 +390,28 @@
 
   // A DOI sitting inside a reference list belongs to a cited work, not to the
   // article being displayed. Badging it would answer a question nobody asked.
+  // The article's own title element. Publisher-specific classes come first,
+  // because a bare `h1` on some sites is the journal name or a site banner.
+  const ARTICLE_TITLE_SELECTORS = [
+    'h1.c-article-title',            // BMC / Springer Nature
+    'h1[data-test="article-title"]', // BMC
+    'h1.citation__title',            // ACS
+    'h1.article-title',              // HighWire (eNeuro, bioRxiv)
+    'h1#screen-reader-main-title',   // ScienceDirect
+    'h1.title-text',                 // Wiley
+    'h1',
+  ];
+
+  function articleTitleElement() {
+    for (const sel of ARTICLE_TITLE_SELECTORS) {
+      try {
+        const el = document.querySelector(sel);
+        if (el && (el.textContent || '').trim()) return el;
+      } catch (e) { /* malformed selector — skip */ }
+    }
+    return null;
+  }
+
   // Verified necessary: Nature, eNeuro and bioRxiv article pages all carry many
   // doi.org links in their reference lists, so an unscoped `a[href*="doi.org"]`
   // would badge cited works instead of the article being read.
@@ -629,6 +651,23 @@
     const title = metaTitle(document);
     const anchors = findDoiAnchors(document.body || document);
 
+    // Badge the article title whenever the page has a paper identity — not merely
+    // as a fallback when no DOI is visible. On BMC/Springer the only visible DOI
+    // sits in a citation block at the very bottom of the article, where a dot
+    // answers the question long after you have scrolled past asking it. The title
+    // is always at the top, so that is where the answer belongs.
+    const hasIdentity = !!pageDoi || !!document.querySelector('meta[name="citation_title" i]');
+    let painted = 0;
+    if (hasIdentity) {
+      const titleEl = articleTitleElement();
+      if (titleEl) {
+        const v = decide(pageDoi, title, index);
+        placeDot(titleEl.lastChild || titleEl, v.state, { ...info0, ...v },
+          pageDoi || normalizeTitle(title) || 'article-title');
+        painted += 1;
+      }
+    }
+
     if (anchors.length) {
       for (const a of anchors) {
         // Every anchor is judged on its OWN DOI. The page title is only offered
@@ -640,17 +679,11 @@
         const ownsPageTitle = pageDoi ? a.doi === pageDoi : anchors.length === 1;
         const v = decide(a.doi, ownsPageTitle ? title : '', index);
         placeDot(a.node, v.state, { ...info0, ...v }, a.doi);
+        painted += 1;
       }
-      return anchors.length;
     }
 
-    if (!pageDoi) return 0; // no paper identity on this page — do nothing at all
-
-    // Stated fallback anchor: the article title.
-    const verdict = decide(pageDoi, title, index);
-    const h1 = document.querySelector('h1');
-    if (h1) placeDot(h1.lastChild || h1, verdict.state, { ...info0, ...verdict }, pageDoi);
-    return h1 ? 1 : 0;
+    return painted;
   }
 
   // ────────────────────────────────────────────────────────────────── bootstrap
