@@ -39,7 +39,9 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const CACHE_VERSION = 1;
+  // Bumped to 2 when meta gained `complete`. A v1 cache has no completeness
+  // evidence, so it is discarded and rebuilt rather than trusted for red dots.
+  const CACHE_VERSION = 2;
 
   const K_META = 'zotdot.meta';
   const K_DOI = 'zotdot.doi';
@@ -221,30 +223,46 @@
       `/items/top?since=${meta.cursor}&format=versions`
     );
     const serverVersion = parseInt(headers['last-modified-version'] || '0', 10) || meta.cursor;
-    const changed = Object.keys(JSON.parse(body || '{}'));
+    const changed = Object.keys(asVersionsObject(JSON.parse(body || '{}')));
 
     if (headers['zotero-schema-version'] && headers['zotero-schema-version'] !== meta.schema) {
       return buildIndex(); // schema moved under us; the cache shape is no longer trustworthy
     }
 
-    const next = { ...meta, checkedAt: Date.now(), cursor: serverVersion };
-
-    if (!changed.length) {
-      await gm.set(K_META, next);
+    // The library version did not move, so nothing was added, edited, or deleted.
+    // This is the common case and it costs no further requests.
+    if (serverVersion === meta.cursor && !changed.length) {
+      await gm.set(K_META, { ...meta, checkedAt: Date.now() });
       return null; // caller keeps whatever it already loaded
     }
 
-    const doiMap = await gm.get(K_DOI, {});
-    const titleMap = await gm.get(K_TITLE, {});
+    const doiMap = await gm.get(K_DOI, null);
+    const titleMap = (await gm.get(K_TITLE, null)) || Object.create(null);
+    // The delta folds changed items into the EXISTING maps. If the DOI map is
+    // missing or empty, folding into a fresh object would persist a handful of
+    // items as though they were the whole library — mass false red. Rebuild.
+    if (!doiMap || !Object.keys(doiMap).length) return buildIndex();
 
     for (let i = 0; i < changed.length; i += 50) {
       const batch = changed.slice(i, i + 50).join(',');
       const { body: b } = await zoteroGet(`/items?itemKey=${batch}&format=json`);
-      foldItems(JSON.parse(b), doiMap, titleMap);
+      foldItems(asItemArray(JSON.parse(b)), doiMap, titleMap);
     }
 
-    await pruneDeleted(meta.cursor, doiMap, titleMap);
+    // A trashed item vanishes from `/items/top?since=`, so `changed` can be empty
+    // while the library version moved — a deletion is exactly that shape. Pruning
+    // must therefore run whenever the version moved at all, not only when items
+    // came back, and always against the PRE-refresh cursor: once the cursor
+    // advances past a deletion, `/deleted?since=` can never report it again and
+    // the stale entry is a permanent false green.
+    const pruneResult = await pruneDeleted(meta.cursor, doiMap, titleMap);
 
+    // Hold the cursor back when the deletion window could not be read, so the
+    // next refresh retries the same window instead of skipping past it forever.
+    // A Zotero with no /deleted endpoint is a different case: retrying gains
+    // nothing there, so the cursor advances and deletions surface on rebuild.
+    const nextCursor = pruneResult === 'failed' ? meta.cursor : serverVersion;
+    const next = { ...meta, checkedAt: Date.now(), cursor: nextCursor };
     next.doiCount = Object.keys(doiMap).length;
     next.titleCount = Object.keys(titleMap).length;
     await gm.set(K_DOI, doiMap);
@@ -254,16 +272,26 @@
   }
 
   // Deletions do not show up in `since=`; Zotero exposes them separately.
-  // Best-effort: a failure here leaves stale-present entries, which produce a
-  // false green — annoying but not destructive, unlike a false red.
+  // Returns 'pruned' when the window was read, 'unsupported' when this Zotero has
+  // no /deleted endpoint at all, and 'failed' when the request itself broke. The
+  // caller uses that to decide whether the cursor may advance past this window:
+  // advancing past an unread deletion makes it permanently invisible.
   async function pruneDeleted(since, doiMap, titleMap) {
+    let body;
     try {
-      const { body } = await zoteroGet(`/deleted?since=${since}`);
-      const gone = new Set((JSON.parse(body || '{}').items) || []);
-      if (!gone.size) return;
-      for (const [k, v] of Object.entries(doiMap)) if (gone.has(v)) delete doiMap[k];
-      for (const [k, v] of Object.entries(titleMap)) if (gone.has(v)) delete titleMap[k];
-    } catch (e) { /* endpoint absent or errored — keep going */ }
+      ({ body } = await zoteroGet(`/deleted?since=${since}`));
+    } catch (e) {
+      return /zotero (404|501)/.test(e.message) ? 'unsupported' : 'failed';
+    }
+    let gone;
+    try {
+      gone = new Set((JSON.parse(body || '{}').items) || []);
+    } catch (e) {
+      return 'failed'; // unparseable body — treat the window as unread
+    }
+    for (const [k, v] of Object.entries(doiMap)) if (gone.has(v)) delete doiMap[k];
+    for (const [k, v] of Object.entries(titleMap)) if (gone.has(v)) delete titleMap[k];
+    return 'pruned';
   }
 
   // ────────────────────────────────────────────────────────── page: extraction
@@ -345,21 +373,24 @@
   function findDoiAnchors(root) {
     const found = [];
     const seen = new Set();
+    // The same DOI printed twice on one page is still one identity, so dedupe by
+    // value — two dots for one DOI is two answers to one question.
+    const seenDoi = new Set();
 
     for (const a of root.querySelectorAll('a[href*="doi.org/"], a[href^="doi:"]')) {
       if (inReferenceZone(a)) continue;
       const doi = normalizeDoi(a.getAttribute('href')) || normalizeDoi(a.textContent);
       if (!doi || seen.has(a)) continue;
       seen.add(a);
+      seenDoi.add(doi);
       found.push({ doi, node: a, source: 'link' });
     }
 
-    if (found.length) return found;
+    // Do NOT stop here when links were found. Nature prints the article's own DOI
+    // as plain text while linking dozens of *cited* DOIs, so a page can legitimately
+    // carry both link anchors and a text-only DOI that matters more. Verified by
+    // rendering: early-returning here left the Nature-shaped case unbadged.
 
-    // Text fallback only. The same DOI printed twice in the same prose is still
-    // one identity, so dedupe by value — two dots for one DOI is two answers to
-    // one question.
-    const seenDoi = new Set();
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
         if (!n.nodeValue || n.nodeValue.length > 400) return NodeFilter.FILTER_REJECT;
@@ -385,16 +416,31 @@
   // Multi-result pages are where this is most useful and where a per-page
   // single-DOI assumption falls apart hardest.
   const ROW_ADAPTERS = [
-    { host: /scholar\.google\./, rows: '#gs_res_ccl_mid .gs_r.gs_or', title: '.gs_rt' },
-    { host: /pubmed\.ncbi\.nlm\.nih\.gov/, rows: 'article.full-docsum', title: '.docsum-title' },
-    { host: /(bio|med)rxiv\.org/, rows: '.highwire-article-citation', title: '.highwire-cite-title' },
+    { host: /scholar\.google\./, rows: '#gs_res_ccl_mid .gs_r.gs_or', title: '.gs_rt', distinctive: true },
+    { host: /pubmed\.ncbi\.nlm\.nih\.gov/, rows: 'article.full-docsum', title: '.docsum-title', distinctive: true },
+    { host: /(bio|med)rxiv\.org/, rows: '.highwire-article-citation', title: '.highwire-cite-title', distinctive: true },
     { host: /europepmc\.org/, rows: '.resultList > li', title: '.title' },
     { host: /semanticscholar\.org/, rows: '[data-test-id="search-result"]', title: '[data-test-id="title-link"]' },
     { host: /sciencedirect\.com\/search/, rows: '.ResultItem', title: '.result-list-title-link' },
   ];
 
+  // `distinctive: true` marks a rows-selector specific enough to identify the
+  // platform on its own. Those adapters activate structurally, which is strictly
+  // more robust than hostname matching: it survives regional Scholar domains,
+  // library proxies, and HighWire-family journals we never enumerated. Generic
+  // selectors (`.ResultItem`, `.resultList > li`) stay host-gated, because
+  // structural activation on them would false-positive on unrelated sites.
   function activeAdapter() {
-    return ROW_ADAPTERS.find((a) => a.host.test(location.hostname + location.pathname)) || null;
+    const here = location.hostname + location.pathname;
+    for (const a of ROW_ADAPTERS) {
+      if (a.host.test(here)) return a;
+    }
+    for (const a of ROW_ADAPTERS) {
+      try {
+        if (a.distinctive && document.querySelector(a.rows)) return a;
+      } catch (e) { /* malformed selector — skip */ }
+    }
+    return null;
   }
 
   // ──────────────────────────────────────────────────────────── page: rendering
@@ -486,19 +532,42 @@
 
   // ────────────────────────────────────────────────────────────── decide + paint
 
+  // The maps are created with Object.create(null), but they round-trip through GM
+  // storage as JSON and come back with Object.prototype attached. normalizeTitle
+  // emits [a-z0-9 ] only, so a paper titled "Constructor" normalizes to exactly
+  // `constructor` — a bare `map[key]` would hit the prototype and report a match
+  // whose "key" is a function. Own-property only.
+  function lookupKey(map, key) {
+    if (!map || !key) return '';
+    return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : '';
+  }
+
   function decide(doi, title, index) {
     if (!index) return { state: STATE.UNKNOWN, reason: 'index not built yet' };
-    if (doi && index.doiMap[doi]) return { state: STATE.HIT, key: index.doiMap[doi], doi };
+    // An index that cannot answer "absent" must never say "absent". A truncated or
+    // empty mirror still answers "present" correctly, so hits are kept.
+    const doiKey = lookupKey(index.doiMap, doi);
+    if (doi && doiKey) return { state: STATE.HIT, key: doiKey, doi };
     const t = normalizeTitle(title);
-    if (t && index.titleMap[t]) return { state: STATE.TITLE, key: index.titleMap[t], doi };
+    const titleKey = lookupKey(index.titleMap, t);
+    if (t && titleKey) return { state: STATE.TITLE, key: titleKey, doi };
+    if (index.unusable) {
+      return { state: STATE.UNKNOWN, reason: index.unusableReason || 'index incomplete', doi };
+    }
     if (!doi && !t) return { state: STATE.UNKNOWN, reason: 'no DOI or title on page' };
-    // Red is only reachable from an index we actually have. Every other path is grey.
+    // Red is only reachable from a complete index we actually have. Every other
+    // path is grey.
     return { state: STATE.MISS, doi };
   }
 
   function scan(index, meta) {
     const info0 = { builtAt: meta.builtAt, checkedAt: meta.checkedAt };
-    const adapter = activeAdapter();
+    const pageDoi = metaDoi(document) || '';
+
+    // An article page that happens to embed a results-shaped list ("related
+    // articles") is still an article page. Its own citation_doi outranks any
+    // structural row match, so the dot lands on the paper actually being read.
+    const adapter = pageDoi ? null : activeAdapter();
     const rows = adapter ? Array.from(document.querySelectorAll(adapter.rows)) : [];
 
     if (rows.length) {
@@ -520,7 +589,6 @@
     }
 
     // Single-paper page.
-    const pageDoi = metaDoi(document) || '';
     const title = metaTitle(document);
     const anchors = findDoiAnchors(document.body || document);
 
@@ -557,13 +625,34 @@
     return false;
   }
 
+  // A mirror may only answer "not in your library" when it is known to cover the
+  // whole library. A build that ran out of MAX_PAGES covers a prefix; a build that
+  // came back empty (wrong library id, Zotero mid-startup) covers nothing. Both
+  // would otherwise paint confident red on papers Vincent owns.
+  function indexIsUsable(meta) {
+    return !!meta && meta.complete === true && (meta.doiCount + meta.titleCount) > 0;
+  }
+
+  function makeIndex(meta, doiMap, titleMap) {
+    const usable = indexIsUsable(meta);
+    return {
+      doiMap,
+      titleMap,
+      unusable: !usable,
+      unusableReason: usable ? ''
+        : (meta && meta.complete !== true
+          ? 'library mirror is incomplete — rebuild to get red/green'
+          : 'library mirror is empty — rebuild to get red/green'),
+    };
+  }
+
   async function loadIndex() {
     const meta = await gm.get(K_META, null);
     if (!meta || meta.cacheVersion !== CACHE_VERSION) return { meta: null, index: null };
     const doiMap = await gm.get(K_DOI, null);
     if (!doiMap) return { meta: null, index: null };
     const titleMap = await gm.get(K_TITLE, {});
-    return { meta, index: { doiMap, titleMap } };
+    return { meta, index: makeIndex(meta, doiMap, titleMap) };
   }
 
   async function main() {
@@ -644,6 +733,7 @@
 
   const testable = {
     normalizeDoi, normalizeTitle, findDoisInText, foldItems, decide, ageString, SKIP_TYPES,
+    asItemArray, asVersionsObject, lookupKey, indexIsUsable, makeIndex,
   };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = testable;
