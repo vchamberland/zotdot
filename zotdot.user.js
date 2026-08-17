@@ -138,6 +138,22 @@
     return { headers, body: res.responseText };
   }
 
+  // A 200 carrying an unexpected body must never be allowed to become the index.
+  // Zotero answering with an error page, an empty string, or a bare object where
+  // an array belongs would otherwise fold into a near-empty mirror and paint red
+  // on the whole library. Throwing routes it to main's catch, which stays grey.
+  function asItemArray(parsed) {
+    if (!Array.isArray(parsed)) throw new Error('zotero: expected an item array');
+    return parsed;
+  }
+
+  function asVersionsObject(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('zotero: expected a versions object');
+    }
+    return parsed;
+  }
+
   const SKIP_TYPES = new Set(['attachment', 'note', 'annotation']);
 
   function foldItems(items, doiMap, titleMap) {
@@ -163,6 +179,10 @@
     let cursor = 0;
     let schema = '';
     let pages = 0;
+    // Only a short final page proves we reached the end of the library. Running
+    // out of MAX_PAGES instead means the mirror is a prefix of the library, and a
+    // prefix cannot answer "absent" — see indexIsUsable.
+    let complete = false;
 
     for (let start = 0; pages < MAX_PAGES; start += PAGE_SIZE) {
       const { headers, body } = await zoteroGet(
@@ -172,10 +192,10 @@
       cursor = Math.max(cursor, parseInt(headers['last-modified-version'] || '0', 10) || 0);
       schema = headers['zotero-schema-version'] || schema;
 
-      const items = JSON.parse(body);
+      const items = asItemArray(JSON.parse(body));
       foldItems(items, doiMap, titleMap);
       if (onProgress) onProgress(start + items.length, headers['total-results']);
-      if (items.length < PAGE_SIZE) break;
+      if (items.length < PAGE_SIZE) { complete = true; break; }
     }
 
     const meta = {
@@ -185,6 +205,7 @@
       builtAt: Date.now(),
       checkedAt: Date.now(),
       pages,
+      complete,
       doiCount: Object.keys(doiMap).length,
       titleCount: Object.keys(titleMap).length,
     };
@@ -335,6 +356,10 @@
 
     if (found.length) return found;
 
+    // Text fallback only. The same DOI printed twice in the same prose is still
+    // one identity, so dedupe by value — two dots for one DOI is two answers to
+    // one question.
+    const seenDoi = new Set();
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
         if (!n.nodeValue || n.nodeValue.length > 400) return NodeFilter.FILTER_REJECT;
@@ -348,7 +373,9 @@
     let n;
     while ((n = walker.nextNode()) && found.length < 8) {
       const dois = findDoisInText(n.nodeValue);
-      if (dois.length) found.push({ doi: dois[0], node: n.parentElement, source: 'text' });
+      if (!dois.length || seenDoi.has(dois[0])) continue;
+      seenDoi.add(dois[0]);
+      found.push({ doi: dois[0], node: n.parentElement, source: 'text' });
     }
     return found;
   }
@@ -416,22 +443,35 @@
     }
   }
 
-  function placeDot(node, state, info) {
+  // Idempotency is keyed on (anchor node, DOI), not on the node alone. A single
+  // element can legitimately carry several distinct DOIs — a text anchor is the
+  // shared parentElement of its text nodes — and a node-only guard would repaint
+  // the first DOI's dot with the second DOI's verdict.
+  const painted = new WeakMap(); // node -> Map<doiKey, dotElement>
+
+  // `idKey` MUST come from stable page data (the anchor's DOI, or the row's
+  // normalized title) and never from the verdict — the verdict's DOI is empty on
+  // the pre-index grey pass and populated afterwards, which would key the same
+  // anchor twice and stack two dots on it.
+  function placeDot(node, state, info, idKey) {
     if (!node || !node.parentNode) return null;
-    // Idempotency: one dot per anchor, forever. A MutationObserver rescan or a
-    // second adapter pass must not stack dots.
-    if (node.dataset && node.dataset.zotdotMarked === '1') {
-      const existing = node.nextElementSibling;
-      if (existing && existing.classList && existing.classList.contains('zotdot')) {
-        paintDot(existing, state, info);
-        return existing;
-      }
+    const key = idKey || info.doi || '∅';
+
+    let byDoi = painted.get(node);
+    if (!byDoi) { byDoi = new Map(); painted.set(node, byDoi); }
+
+    const existing = byDoi.get(key);
+    if (existing && existing.isConnected) {
+      paintDot(existing, state, info); // a rescan may sharpen the verdict
+      return existing;
     }
+
     const dot = document.createElement('span');
     dot.className = 'zotdot';
+    dot.dataset.zotdotFor = key;
     paintDot(dot, state, info);
     node.parentNode.insertBefore(dot, node.nextSibling);
-    if (node.dataset) node.dataset.zotdotMarked = '1';
+    byDoi.set(key, dot);
     return dot;
   }
 
@@ -463,13 +503,18 @@
 
     if (rows.length) {
       for (const row of rows) {
-        const titleEl = row.querySelector(adapter.title) || row.querySelector('a');
-        if (!titleEl) continue;
+        const titleBlock = row.querySelector(adapter.title) || row.querySelector('a');
+        if (!titleBlock) continue;
+        // Anchor to the inner link, not the block-level heading — inserting after
+        // an <h3> puts the dot on its own line instead of beside the title.
+        const titleEl = titleBlock.querySelector('a') || titleBlock;
         const anchors = findDoiAnchors(row);
         const doi = anchors.length ? anchors[0].doi : '';
-        const verdict = decide(doi, titleEl.textContent, index);
+        const titleText = titleEl.textContent || '';
+        const verdict = decide(doi, titleText, index);
         const target = anchors.length ? anchors[0].node : titleEl;
-        placeDot(target, verdict.state, { ...info0, ...verdict });
+        placeDot(target, verdict.state, { ...info0, ...verdict },
+          doi || normalizeTitle(titleText) || 'row');
       }
       return rows.length;
     }
@@ -478,12 +523,18 @@
     const pageDoi = metaDoi(document) || '';
     const title = metaTitle(document);
     const anchors = findDoiAnchors(document.body || document);
-    const verdict = decide(pageDoi || (anchors[0] && anchors[0].doi) || '', title, index);
 
     if (anchors.length) {
       for (const a of anchors) {
-        const v = a.doi === (pageDoi || a.doi) ? verdict : decide(a.doi, '', index);
-        placeDot(a.node, v.state, { ...info0, ...v });
+        // Every anchor is judged on its OWN DOI. The page title is only offered
+        // as a fallback identity to the anchor that actually IS this page's
+        // paper: the one matching the meta DOI, or — when the page states no meta
+        // DOI and shows exactly one — that single anchor. Lending the page title
+        // to an unrelated DOI (a lab page listing five papers) would paint amber
+        // on four papers the title does not describe.
+        const ownsPageTitle = pageDoi ? a.doi === pageDoi : anchors.length === 1;
+        const v = decide(a.doi, ownsPageTitle ? title : '', index);
+        placeDot(a.node, v.state, { ...info0, ...v }, a.doi);
       }
       return anchors.length;
     }
@@ -491,8 +542,9 @@
     if (!pageDoi) return 0; // no paper identity on this page — do nothing at all
 
     // Stated fallback anchor: the article title.
+    const verdict = decide(pageDoi, title, index);
     const h1 = document.querySelector('h1');
-    if (h1) placeDot(h1.lastChild || h1, verdict.state, { ...info0, ...verdict });
+    if (h1) placeDot(h1.lastChild || h1, verdict.state, { ...info0, ...verdict }, pageDoi);
     return h1 ? 1 : 0;
   }
 
@@ -532,12 +584,12 @@
       if (!index) {
         const built = await buildIndex();
         meta = built.meta;
-        index = { doiMap: built.doiMap, titleMap: built.titleMap };
+        index = makeIndex(built.meta, built.doiMap, built.titleMap);
       } else if (Date.now() - (meta.checkedAt || 0) > REFRESH_INTERVAL_MS) {
         const refreshed = await refreshIndex(meta);
         if (refreshed) {
           meta = refreshed.meta;
-          index = { doiMap: refreshed.doiMap, titleMap: refreshed.titleMap };
+          index = makeIndex(refreshed.meta, refreshed.doiMap, refreshed.titleMap);
         } else {
           meta = { ...meta, checkedAt: Date.now() };
         }
@@ -551,20 +603,32 @@
 
     scan(index, meta);
 
+    // Inserting a dot is itself a childList mutation, so the observer would
+    // re-enter on its own output. Detaching around each scan makes that
+    // structurally impossible rather than merely unlikely.
+    const target = document.body || document.documentElement;
+    const observeOpts = { childList: true, subtree: true };
+    let scanning = false;
     const observer = new MutationObserver(() => {
+      if (scanning) return;
       clearTimeout(observer._t);
-      observer._t = setTimeout(() => scan(index, meta), 300);
+      observer._t = setTimeout(() => {
+        scanning = true;
+        observer.disconnect();
+        try { scan(index, meta); } finally {
+          scanning = false;
+          observer.observe(target, observeOpts);
+        }
+      }, 300);
     });
-    observer.observe(document.body || document.documentElement, {
-      childList: true, subtree: true,
-    });
+    observer.observe(target, observeOpts);
 
     try {
       if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('zotdot: rebuild index', async () => {
           const built = await buildIndex();
           console.info('[zotdot] rebuilt:', built.meta);
-          scan({ doiMap: built.doiMap, titleMap: built.titleMap }, built.meta);
+          scan(makeIndex(built.meta, built.doiMap, built.titleMap), built.meta);
         });
         GM_registerMenuCommand('zotdot: show index status', async () => {
           const m = await gm.get(K_META, null);
