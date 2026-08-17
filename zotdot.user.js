@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.2.0
+// @version      0.2.1
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @match        *://*/*
@@ -558,8 +558,15 @@
   // normalized title) and never from the verdict — the verdict's DOI is empty on
   // the pre-index grey pass and populated afterwards, which would key the same
   // anchor twice and stack two dots on it.
-  function placeDot(node, state, info, idKey) {
-    if (!node || !node.parentNode) return null;
+  // `inside: true` appends the dot as the last child of `node` instead of
+  // inserting it after `node`. Required whenever the anchor is an element whose
+  // last child we would otherwise target: passing `el.lastChild` is a moving
+  // target, because after the first insertion the last child IS the dot, so the
+  // next scan keys on a different node and appends a second one. Anchor on the
+  // stable element and grow inside it.
+  function placeDot(node, state, info, idKey, inside) {
+    if (!node) return null;
+    if (!inside && !node.parentNode) return null;
     const key = idKey || info.doi || '∅';
 
     let byDoi = painted.get(node);
@@ -575,7 +582,8 @@
     dot.className = 'zotdot';
     dot.dataset.zotdotFor = key;
     paintDot(dot, state, info);
-    node.parentNode.insertBefore(dot, node.nextSibling);
+    if (inside) node.appendChild(dot);
+    else node.parentNode.insertBefore(dot, node.nextSibling);
     byDoi.set(key, dot);
     return dot;
   }
@@ -662,8 +670,8 @@
       const titleEl = articleTitleElement();
       if (titleEl) {
         const v = decide(pageDoi, title, index);
-        placeDot(titleEl.lastChild || titleEl, v.state, { ...info0, ...v },
-          pageDoi || normalizeTitle(title) || 'article-title');
+        placeDot(titleEl, v.state, { ...info0, ...v },
+          pageDoi || normalizeTitle(title) || 'article-title', true);
         painted += 1;
       }
     }

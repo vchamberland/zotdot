@@ -106,6 +106,8 @@ node test/pure.test.cjs         # 29 assertions, pure functions, no network
 node test/live-index.cjs        # integration against your running Zotero
 ```
 
+The fixtures deliberately keep the cached index **fresh** (`checkedAt: Date.now()`), so no network call is attempted and `main()` runs its full scan path — initial paint, post-index repaint, and a `MutationObserver` pass. An earlier version dated the fixture index 6 minutes old, which made every run attempt a refresh, fail against the stubbed network, and return after a *single* scan. That hid a duplicate-dot bug that only appears when `scan()` runs more than once. If you change the fixture's `checkedAt`, you lose that coverage.
+
 `live-index.cjs` exercises the same `foldItems()` the userscript uses, over your real library, and checks request count, map population, cursor capture, a known-present DOI resolving, a fabricated DOI not resolving, and `since=` returning empty immediately after a build. It exits `2` if Zotero isn't running.
 
 ## Troubleshooting
