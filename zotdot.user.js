@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.2.1
+// @version      0.3.0
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @match        *://*/*
@@ -475,6 +475,13 @@
   // Multi-result pages are where this is most useful and where a per-page
   // single-DOI assumption falls apart hardest.
   const ROW_ADAPTERS = [
+    // Scholar profile ("citations") pages list publications in a table, not in
+    // the .gs_r result blocks, so the search adapter finds zero rows there.
+    // NOTE: these two selectors are from prior knowledge, NOT verified against a
+    // live page this session — scholar.google.com served a captcha to every
+    // non-browser fetch. If profile pages stay bare, these are the two strings to
+    // correct, and nothing else needs to change.
+    { host: /scholar\.google\./, rows: '#gsc_a_b .gsc_a_tr', title: '.gsc_a_at', distinctive: true },
     { host: /scholar\.google\./, rows: '#gs_res_ccl_mid .gs_r.gs_or', title: '.gs_rt', distinctive: true },
     { host: /pubmed\.ncbi\.nlm\.nih\.gov/, rows: 'article.full-docsum', title: '.docsum-title', distinctive: true },
     { host: /(bio|med)rxiv\.org/, rows: '.highwire-article-citation', title: '.highwire-cite-title', distinctive: true },
@@ -489,17 +496,22 @@
   // library proxies, and HighWire-family journals we never enumerated. Generic
   // selectors (`.ResultItem`, `.resultList > li`) stay host-gated, because
   // structural activation on them would false-positive on unrelated sites.
+  function rowsPresent(a) {
+    try { return !!document.querySelector(a.rows); } catch (e) { return false; }
+  }
+
   function activeAdapter() {
     const here = location.hostname + location.pathname;
-    for (const a of ROW_ADAPTERS) {
-      if (a.host.test(here)) return a;
-    }
-    for (const a of ROW_ADAPTERS) {
-      try {
-        if (a.distinctive && document.querySelector(a.rows)) return a;
-      } catch (e) { /* malformed selector — skip */ }
-    }
-    return null;
+    const onThisHost = ROW_ADAPTERS.filter((a) => a.host.test(here));
+    // One host can serve several layouts — Scholar has both a search-results page
+    // and a profile page. Matching the hostname is not enough; take the adapter
+    // whose rows actually exist in this document.
+    for (const a of onThisHost) if (rowsPresent(a)) return a;
+    for (const a of ROW_ADAPTERS) if (a.distinctive && rowsPresent(a)) return a;
+    // A known listing host with no rows yet (still loading, or an empty search) is
+    // still NOT an article page — return the host adapter so the single-paper
+    // branch does not start badging navigation headings.
+    return onThisHost[0] || null;
   }
 
   // ──────────────────────────────────────────────────────────── page: rendering
@@ -541,8 +553,10 @@
   function tooltip(state, info) {
     const age = `index built ${ageString(info.builtAt)}, checked ${ageString(info.checkedAt)}`;
     switch (state) {
-      case STATE.HIT: return `In Zotero — DOI match (${info.doi})\n${age}\nClick to open in Zotero`;
-      case STATE.TITLE: return `Probably in Zotero — title match only, DOI not recorded\n${age}\nClick to open in Zotero`;
+      case STATE.HIT: return info.via === 'title'
+        ? `In Zotero — exact title match (no DOI on this page)\n${age}\nClick to open in Zotero`
+        : `In Zotero — DOI match (${info.doi})\n${age}\nClick to open in Zotero`;
+      case STATE.TITLE: return `Probably in Zotero — title match, but the title is short enough to collide\n${age}\nClick to open in Zotero`;
       case STATE.MISS: return `Not in Zotero (${info.doi || 'no DOI found'})\n${age}`;
       default: return `Unknown — ${info.reason || 'Zotero not reachable'}\n${age}`;
     }
@@ -609,6 +623,16 @@
     return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : '';
   }
 
+  // Guards the title-match-as-green rule above. A title has to be long enough and
+  // wordy enough that two unrelated papers are unlikely to share it exactly.
+  const TITLE_GREEN_MIN_CHARS = 25;
+  const TITLE_GREEN_MIN_WORDS = 4;
+
+  function titleIsDistinctive(t) {
+    if (!t || t.length < TITLE_GREEN_MIN_CHARS) return false;
+    return t.split(' ').filter(Boolean).length >= TITLE_GREEN_MIN_WORDS;
+  }
+
   function decide(doi, title, index) {
     if (!index) return { state: STATE.UNKNOWN, reason: 'index not built yet' };
     // An index that cannot answer "absent" must never say "absent". A truncated or
@@ -617,7 +641,15 @@
     if (doi && doiKey) return { state: STATE.HIT, key: doiKey, doi };
     const t = normalizeTitle(title);
     const titleKey = lookupKey(index.titleMap, t);
-    if (t && titleKey) return { state: STATE.TITLE, key: titleKey, doi };
+    if (t && titleKey) {
+      // An exact match on a long, distinctive title is strong evidence — strong
+      // enough for green. Google Scholar carries no DOI anywhere, so holding every
+      // Scholar row at amber made amber the only colour that page could ever show,
+      // which is no signal at all. Short or generic titles ("Editorial",
+      // "Introduction", "Corrigendum") collide across papers and stay amber.
+      const state = titleIsDistinctive(t) ? STATE.HIT : STATE.TITLE;
+      return { state, key: titleKey, doi, via: 'title' };
+    }
     if (index.unusable) {
       return { state: STATE.UNKNOWN, reason: index.unusableReason || 'index incomplete', doi };
     }
@@ -812,6 +844,7 @@
   const testable = {
     normalizeDoi, normalizeTitle, findDoisInText, foldItems, decide, ageString, SKIP_TYPES,
     asItemArray, asVersionsObject, lookupKey, indexIsUsable, makeIndex,
+    titleIsDistinctive,
   };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = testable;

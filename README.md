@@ -53,9 +53,9 @@ Membership then becomes an in-memory set lookup. Painting a dot costs zero netwo
 
 | Dot | Meaning |
 |---|---|
-| 🟢 **Green** | The DOI on this page is in your library. Click to open the item in Zotero. |
+| 🟢 **Green** | The paper is in your library — matched by DOI, or by an exact match on a distinctive title (≥25 characters and ≥4 words) when the page carries no DOI. The tooltip says which. Click to open the item in Zotero. |
 | 🔴 **Red** | The DOI is **not** in your library, and the index is present and fresh. |
-| 🟠 **Amber** | No DOI match, but a paper with this exact normalized title is in your library — probably the same work, recorded without a DOI. Click to open it. |
+| 🟠 **Amber** | A title match on a title too short or generic to trust — `Editorial`, `Introduction`, `Corrigendum`. Titles like that collide across papers, so the match is offered rather than asserted. Click to open it. |
 | ⚪ **Grey (dashed)** | **Unknown.** Zotero isn't running, or the index hasn't been built yet. |
 
 Grey exists because a red dot while Zotero is closed would assert "you don't have this paper" when the truth is "I can't know." Hover any dot for its state, the matched Zotero key, and how old the index is.
@@ -88,6 +88,10 @@ DOIs inside reference lists are excluded — Nature, eNeuro and bioRxiv article 
 Google Scholar, PubMed search, bioRxiv/medRxiv search, Europe PMC, Semantic Scholar and ScienceDirect search get one dot per result row.
 
 **Google Scholar carries no DOI anywhere** — not per row, not in meta tags (verified: zero occurrences of `doi.org` in the served HTML). Rows there are matched on **normalized title**, which is why every item's title is indexed, including items that have a DOI. A title match shows **amber**, not green: it says "a paper with this exact title is in your library", which is weaker evidence than a DOI match and deserves to look different.
+
+A distinctive title match shows **green**, same as a DOI match, because an exact match on a long multi-word title is strong evidence and Scholar offers nothing stronger. Holding every Scholar row at amber made amber the only colour that page could ever display, which carried no information. Short generic titles stay amber.
+
+Scholar profile ("citations") pages use a different layout from search results — a publication table rather than `.gs_r` blocks — and have their own adapter. **Those two selectors (`#gsc_a_b .gsc_a_tr`, `.gsc_a_at`) are unverified:** scholar.google.com serves a captcha to every non-browser fetch, so they come from prior knowledge rather than a live page. If profile pages stay bare, those two strings are the only thing to correct.
 
 Scholar also prefixes titles with a format tag — `[HTML] Closed-loop brain stimulation`, `[PDF] …`, `[BOOK] …` — which is stripped before matching. Titles are compared on their first 90 normalized characters on both sides, so very long titles match on their prefix.
 
