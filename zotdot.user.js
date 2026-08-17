@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.4.0
+// @version      0.5.0
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @match        *://*/*
@@ -764,7 +764,13 @@
       }
     }
 
-    if (anchors.length) {
+
+    // Only badge a visible DOI when the title could NOT carry the answer — a page
+    // with both would otherwise show the same verdict twice, a few centimetres
+    // apart. The DOI is still read and still preferred for MATCHING; this governs
+    // placement only. Pages with a bare DOI and no article metadata (a lab's
+    // publication page, a PDF landing page) still get their dot here.
+    if (!painted && anchors.length) {
       for (const a of anchors) {
         // Every anchor is judged on its OWN DOI. The page title is only offered
         // as a fallback identity to the anchor that actually IS this page's

@@ -63,7 +63,9 @@ Grey exists because a red dot while Zotero is closed would assert "you don't hav
 
 ## Where the dot goes
 
-On an **article page**, the dot is placed on the **article title** whenever the page states a paper identity (`citation_doi` or `citation_title`), *and* next to any visible DOI. The title is the anchor that always works: on BMC and Springer the only visible DOI sits in a citation block at the very bottom of the article, where a dot answers the question long after you have scrolled past asking it.
+On an **article page**, the dot is placed on the **article title** — and nowhere else. The title is the anchor that always works: on BMC and Springer the only visible DOI sits in a citation block at the very bottom of the article, where a dot answers the question long after you have scrolled past asking it.
+
+The DOI is still read, and is still *preferred* for matching — this governs placement only. A visible DOI is badged just in the case where the title could not carry the verdict: a page with a bare DOI and no article metadata, such as a lab's publication list or a PDF landing page. Never both, so the same answer never appears twice a few centimetres apart.
 
 The title element is located by publisher class first — `h1.c-article-title` (BMC/Springer), `h1[data-test="article-title"]`, `h1.citation__title` (ACS), `h1.article-title` (HighWire), `h1#screen-reader-main-title` (ScienceDirect), `h1.title-text` (Wiley) — falling back to a bare `h1`. The ordering matters: a bare `h1` on some publishers is the journal name or a site banner, not the paper.
 
@@ -166,4 +168,4 @@ Chromium 151 does gate loopback behind a per-origin Local Network Access permiss
 | `ISA.md` | ideal-state artifact: problem, criteria, test strategy, decisions |
 | `test/pure.test.cjs` | pure-function tests (normalization, folding, verdicts) |
 | `test/live-index.cjs` | live integration check against Zotero |
-| `test/fixture/` | offline visual harness with a shimmed `GM_*` environment |
+| `test/fixture/` | offline visual harness with a shimmed `GM_*` environment — `demo.html` (bare DOI page: extraction paths + reference exclusion), `demo-article.html` (metadata present: exactly one dot, on the title), `demo-rows.html` (result rows) |
