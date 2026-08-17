@@ -98,6 +98,29 @@ node test/live-index.cjs        # integration against your running Zotero
 
 `live-index.cjs` exercises the same `foldItems()` the userscript uses, over your real library, and checks request count, map population, cursor capture, a known-present DOI resolving, a fabricated DOI not resolving, and `since=` returning empty immediately after a build. It exits `2` if Zotero isn't running.
 
+## Troubleshooting
+
+### Grey dashed dot: "Unknown — index not built yet"
+
+The script is running and found the DOI, but it could not reach Zotero. Check in order:
+
+1. **Is Zotero running?** `curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:23119/api/users/0/items/top?limit=1'` must print `200`. If it prints nothing, start Zotero; if it prints `404`, enable *Settings → Advanced → Allow other applications on this computer to communicate with Zotero*.
+2. **Open the browser console** (F12) on the article page and reload. A line beginning `[zotdot]` names the failure.
+
+### `[zotdot] Zotero unreachable: network refused …` on Chromium 151+ / Brave
+
+Chromium 151 gates requests to loopback and private addresses behind a **Local Network Access** permission, granted **per page origin**. The grant lives in the browser profile as a `local_network` content setting — a granted entry looks like `"https://example.com:443,*": {"setting": 1}`. A publisher page you have never granted has no entry, so the request is refused, and because the request originates in the extension rather than the page, **no permission prompt is shown** — it just fails silently.
+
+Zotero's local API sends no `Access-Control-Allow-*` headers, so a page-context `fetch` is not an alternative; `GM_xmlhttpRequest` is the only route, which is why this gate is load-bearing.
+
+Options, best first:
+
+- **Turn the check off globally.** `brave://flags` (or `chrome://flags`) → search *local network* → set the Local Network Access check to **Disabled** → relaunch. One switch, reversible, and it covers every publisher rather than needing a grant per site.
+- **Grant per origin.** `brave://settings/content` → *Local network access* (naming varies by build) → allow the publisher origin. Correct but untenable in practice: you would repeat it for every journal you visit.
+- **Use Firefox instead.** Firefox does not implement this gate. Install Violentmonkey there and the script works unchanged.
+
+If the console still reports a refusal after disabling the flag, the error message now includes the manager's own fields (`error=`, `status=`, `statusText=`). `ERR_BLOCKED_BY_CLIENT` points at an adblock/Shields rule rather than the permission gate; `ERR_CONNECTION_REFUSED` means nothing is listening on 23119.
+
 ## Not in v1
 
 - **PDF-attachment state.** "I have the paper" and "I have the PDF" are different questions; the second needs a child-item pass per key.

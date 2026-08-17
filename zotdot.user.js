@@ -97,6 +97,23 @@
 
   // ───────────────────────────────────────────── environment shims (GM_* / GM.*)
 
+  // Violentmonkey/Tampermonkey pass a response-ish object to onerror. Its fields
+  // vary by manager and version, so pull anything present rather than assuming a
+  // shape, and append the standing hint: on Chromium 151+ a loopback request can
+  // be refused because the page's origin has no Local Network Access grant.
+  function describeNetworkError(r) {
+    const bits = [];
+    if (r && typeof r === 'object') {
+      for (const k of ['error', 'statusText', 'status', 'readyState', 'finalUrl']) {
+        if (r[k] !== undefined && r[k] !== '' && r[k] !== null) bits.push(`${k}=${r[k]}`);
+      }
+    }
+    const detail = bits.length ? bits.join(' ') : 'no detail from the userscript manager';
+    return `network refused (${detail}) — target ${API}. `
+      + 'On Chromium 151+/Brave this is usually the Local Network Access gate: the '
+      + "page's origin has no localhost grant. See README troubleshooting.";
+  }
+
   const gm = {
     async get(key, fallback) {
       try {
@@ -118,8 +135,12 @@
           timeout: 20000,
           ...opts,
           onload: (r) => resolve(r),
-          onerror: () => reject(new Error('network')),
-          ontimeout: () => reject(new Error('timeout')),
+          // A bare "network" says nothing about WHY. Browsers refuse loopback for
+          // several unrelated reasons — a Local Network Access permission the
+          // origin lacks, an adblock/Shields rule, or nothing listening — and the
+          // distinction decides the fix. Surface whatever the manager hands back.
+          onerror: (r) => reject(new Error(describeNetworkError(r))),
+          ontimeout: () => reject(new Error('timeout — Zotero did not answer within 20s')),
         });
       });
     },
