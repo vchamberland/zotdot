@@ -41,9 +41,10 @@
   const REFRESH_INTERVAL_MS = 120000;
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = 'zotdot/0.1 (local Zotero client)';
-  // Bumped to 2 when meta gained `complete`. A v1 cache has no completeness
-  // evidence, so it is discarded and rebuilt rather than trusted for red dots.
-  const CACHE_VERSION = 2;
+  // Bumped to 3 when the title map began covering every item rather than only
+  // DOI-less ones. An older cache would answer red on Scholar rows for papers
+  // that are in the library, so it is discarded and rebuilt rather than trusted.
+  const CACHE_VERSION = 3;
 
   const K_META = 'zotdot.meta';
   const K_DOI = 'zotdot.doi';
@@ -74,9 +75,15 @@
     return /^10\.\d{4,9}\/\S+$/.test(s) ? s : '';
   }
 
+  // Result listings decorate titles with a format tag — Google Scholar emits
+  // "[HTML] Closed-loop brain stimulation", "[PDF] ...", "[BOOK] ..." — and those
+  // letters would otherwise become part of the key and never match the library.
+  const LISTING_PREFIX = /^\s*\[(html|pdf|book|citation|b|c|h)\]\s*/i;
+
   function normalizeTitle(raw) {
     if (!raw) return '';
     return String(raw)
+      .replace(LISTING_PREFIX, '')
       .toLowerCase()
       .normalize('NFKD')
       .replace(/[\u0300-\u036f]/g, '')
@@ -195,15 +202,13 @@
       const d = it && it.data;
       if (!d || SKIP_TYPES.has(d.itemType)) continue;
       const doi = normalizeDoi(d.DOI);
-      if (doi) {
-        doiMap[doi] = d.key;
-        continue;
-      }
-      // Title fallback is only stored for items that have no DOI — that is the
-      // only case where it can ever be the deciding signal, and it keeps the
-      // cached index roughly half the size it would otherwise be.
+      if (doi) doiMap[doi] = d.key;
+      // EVERY item's title is indexed, including items that have a DOI. Google
+      // Scholar result rows carry no DOI anywhere, so the title is the only
+      // signal available there — restricting the title map to DOI-less items (as
+      // v0.1 did) made every Scholar row for a paper you own render red.
       const t = normalizeTitle(d.title);
-      if (t) titleMap[t] = d.key;
+      if (t && !titleMap[t]) titleMap[t] = d.key;
     }
   }
 

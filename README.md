@@ -30,12 +30,12 @@ The library is a versioned set exposed as an append stream. `Last-Modified-Versi
 
 | | |
 |---|---|
-| Top-level items | 8,559 |
+| Top-level items | 8,638 |
 | Requests for a full build | **18** (`limit=500`) |
-| Full build time | **3.6 s** |
-| DOIs indexed | 5,585 |
-| Titles indexed (DOI-less items only) | 2,536 |
-| Cached index size | **0.36 MB** |
+| Full build time | **3.2 s** |
+| DOIs indexed | 5,633 |
+| Titles indexed (**every** item, not just DOI-less) | 8,171 |
+| Cached index size | **0.83 MB** |
 | Cost of a "has anything changed?" check | one request returning `{}` |
 
 Membership then becomes an in-memory set lookup. Painting a dot costs zero network requests, which is what makes twenty dots on a Google Scholar results page reasonable.
@@ -79,7 +79,9 @@ DOIs inside reference lists are excluded — Nature, eNeuro and bioRxiv article 
 
 Google Scholar, PubMed search, bioRxiv/medRxiv search, Europe PMC, Semantic Scholar and ScienceDirect search get one dot per result row.
 
-**Google Scholar carries no DOI anywhere** — not per row, not in meta tags (verified: zero occurrences of `doi.org` in the served HTML). Rows there are matched on normalized title only, so a match shows amber rather than green. That is an honest limit, not a bug.
+**Google Scholar carries no DOI anywhere** — not per row, not in meta tags (verified: zero occurrences of `doi.org` in the served HTML). Rows there are matched on **normalized title**, which is why every item's title is indexed, including items that have a DOI. A title match shows **amber**, not green: it says "a paper with this exact title is in your library", which is weaker evidence than a DOI match and deserves to look different.
+
+Scholar also prefixes titles with a format tag — `[HTML] Closed-loop brain stimulation`, `[PDF] …`, `[BOOK] …` — which is stripped before matching. Titles are compared on their first 90 normalized characters on both sides, so very long titles match on their prefix.
 
 ## Menu commands
 
