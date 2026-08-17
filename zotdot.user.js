@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.3.0
+// @version      0.4.0
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @match        *://*/*
@@ -41,14 +41,15 @@
   const REFRESH_INTERVAL_MS = 120000;
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = 'zotdot/0.1 (local Zotero client)';
-  // Bumped to 3 when the title map began covering every item rather than only
-  // DOI-less ones. An older cache would answer red on Scholar rows for papers
-  // that are in the library, so it is discarded and rebuilt rather than trusted.
-  const CACHE_VERSION = 3;
+  // Bumped to 4 when the index gained a creator-surname map, used to corroborate
+  // a short title match against the authors printed on the page. An older cache
+  // has no creator data, so it is discarded and rebuilt rather than trusted.
+  const CACHE_VERSION = 4;
 
   const K_META = 'zotdot.meta';
   const K_DOI = 'zotdot.doi';
   const K_TITLE = 'zotdot.title';
+  const K_CREATORS = 'zotdot.creators';
 
   const STATE = {
     HIT: 'hit',         // green  — DOI found in library
@@ -197,12 +198,43 @@
 
   const SKIP_TYPES = new Set(['attachment', 'note', 'annotation']);
 
-  function foldItems(items, doiMap, titleMap) {
+  // Surnames, lowercased and stripped, for corroborating a title match against the
+  // author line a result page prints. Zotero creators are either {lastName} or a
+  // single {name} field for institutional authors.
+  function creatorSurnames(creators) {
+    if (!Array.isArray(creators)) return '';
+    const out = [];
+    for (const c of creators) {
+      if (!c) continue;
+      const raw = c.lastName || c.name || '';
+      const norm = normalizeTitle(raw);
+      if (!norm) continue;
+      const last = norm.split(' ').filter(Boolean).pop();
+      if (last && last.length >= 3 && !out.includes(last)) out.push(last);
+      if (out.length >= 8) break; // long author lists add bytes, not certainty
+    }
+    return out.join(' ');
+  }
+
+  // True when any indexed surname appears as a whole word in the page's author
+  // line. Scholar prints "C Lord, TS Brugha, G Dumas, ..." — initials collapse to
+  // 1-2 char tokens, so only real surnames can match.
+  function authorsCorroborate(surnames, pageAuthorText) {
+    if (!surnames || !pageAuthorText) return false;
+    const tokens = new Set(normalizeTitle(pageAuthorText).split(' ').filter(Boolean));
+    return surnames.split(' ').some((sn) => sn.length >= 3 && tokens.has(sn));
+  }
+
+  function foldItems(items, doiMap, titleMap, creatorMap) {
     for (const it of items) {
       const d = it && it.data;
       if (!d || SKIP_TYPES.has(d.itemType)) continue;
       const doi = normalizeDoi(d.DOI);
       if (doi) doiMap[doi] = d.key;
+      if (creatorMap) {
+        const sn = creatorSurnames(d.creators);
+        if (sn) creatorMap[d.key] = sn;
+      }
       // EVERY item's title is indexed, including items that have a DOI. Google
       // Scholar result rows carry no DOI anywhere, so the title is the only
       // signal available there — restricting the title map to DOI-less items (as
@@ -215,6 +247,7 @@
   async function buildIndex(onProgress) {
     const doiMap = Object.create(null);
     const titleMap = Object.create(null);
+    const creatorMap = Object.create(null);
     let cursor = 0;
     let schema = '';
     let pages = 0;
@@ -232,7 +265,7 @@
       schema = headers['zotero-schema-version'] || schema;
 
       const items = asItemArray(JSON.parse(body));
-      foldItems(items, doiMap, titleMap);
+      foldItems(items, doiMap, titleMap, creatorMap);
       if (onProgress) onProgress(start + items.length, headers['total-results']);
       if (items.length < PAGE_SIZE) { complete = true; break; }
     }
@@ -247,11 +280,13 @@
       complete,
       doiCount: Object.keys(doiMap).length,
       titleCount: Object.keys(titleMap).length,
+      creatorCount: Object.keys(creatorMap).length,
     };
     await gm.set(K_DOI, doiMap);
     await gm.set(K_TITLE, titleMap);
+    await gm.set(K_CREATORS, creatorMap);
     await gm.set(K_META, meta);
-    return { meta, doiMap, titleMap };
+    return { meta, doiMap, titleMap, creatorMap };
   }
 
   // One cheap request. Returns {} when nothing changed, which is the common case.
@@ -275,6 +310,7 @@
 
     const doiMap = await gm.get(K_DOI, null);
     const titleMap = (await gm.get(K_TITLE, null)) || Object.create(null);
+    const creatorMap = (await gm.get(K_CREATORS, null)) || Object.create(null);
     // The delta folds changed items into the EXISTING maps. If the DOI map is
     // missing or empty, folding into a fresh object would persist a handful of
     // items as though they were the whole library — mass false red. Rebuild.
@@ -283,7 +319,7 @@
     for (let i = 0; i < changed.length; i += 50) {
       const batch = changed.slice(i, i + 50).join(',');
       const { body: b } = await zoteroGet(`/items?itemKey=${batch}&format=json`);
-      foldItems(asItemArray(JSON.parse(b)), doiMap, titleMap);
+      foldItems(asItemArray(JSON.parse(b)), doiMap, titleMap, creatorMap);
     }
 
     // A trashed item vanishes from `/items/top?since=`, so `changed` can be empty
@@ -292,7 +328,7 @@
     // came back, and always against the PRE-refresh cursor: once the cursor
     // advances past a deletion, `/deleted?since=` can never report it again and
     // the stale entry is a permanent false green.
-    const pruneResult = await pruneDeleted(meta.cursor, doiMap, titleMap);
+    const pruneResult = await pruneDeleted(meta.cursor, doiMap, titleMap, creatorMap);
 
     // Hold the cursor back when the deletion window could not be read, so the
     // next refresh retries the same window instead of skipping past it forever.
@@ -302,10 +338,12 @@
     const next = { ...meta, checkedAt: Date.now(), cursor: nextCursor };
     next.doiCount = Object.keys(doiMap).length;
     next.titleCount = Object.keys(titleMap).length;
+    next.creatorCount = Object.keys(creatorMap).length;
     await gm.set(K_DOI, doiMap);
     await gm.set(K_TITLE, titleMap);
+    await gm.set(K_CREATORS, creatorMap);
     await gm.set(K_META, next);
-    return { meta: next, doiMap, titleMap };
+    return { meta: next, doiMap, titleMap, creatorMap };
   }
 
   // Deletions do not show up in `since=`; Zotero exposes them separately.
@@ -313,7 +351,7 @@
   // no /deleted endpoint at all, and 'failed' when the request itself broke. The
   // caller uses that to decide whether the cursor may advance past this window:
   // advancing past an unread deletion makes it permanently invisible.
-  async function pruneDeleted(since, doiMap, titleMap) {
+  async function pruneDeleted(since, doiMap, titleMap, creatorMap) {
     let body;
     try {
       ({ body } = await zoteroGet(`/deleted?since=${since}`));
@@ -328,6 +366,7 @@
     }
     for (const [k, v] of Object.entries(doiMap)) if (gone.has(v)) delete doiMap[k];
     for (const [k, v] of Object.entries(titleMap)) if (gone.has(v)) delete titleMap[k];
+    if (creatorMap) for (const k of Object.keys(creatorMap)) if (gone.has(k)) delete creatorMap[k];
     return 'pruned';
   }
 
@@ -481,13 +520,13 @@
     // live page this session — scholar.google.com served a captcha to every
     // non-browser fetch. If profile pages stay bare, these are the two strings to
     // correct, and nothing else needs to change.
-    { host: /scholar\.google\./, rows: '#gsc_a_b .gsc_a_tr', title: '.gsc_a_at', distinctive: true },
-    { host: /scholar\.google\./, rows: '#gs_res_ccl_mid .gs_r.gs_or', title: '.gs_rt', distinctive: true },
-    { host: /pubmed\.ncbi\.nlm\.nih\.gov/, rows: 'article.full-docsum', title: '.docsum-title', distinctive: true },
-    { host: /(bio|med)rxiv\.org/, rows: '.highwire-article-citation', title: '.highwire-cite-title', distinctive: true },
-    { host: /europepmc\.org/, rows: '.resultList > li', title: '.title' },
-    { host: /semanticscholar\.org/, rows: '[data-test-id="search-result"]', title: '[data-test-id="title-link"]' },
-    { host: /sciencedirect\.com\/search/, rows: '.ResultItem', title: '.result-list-title-link' },
+    { host: /scholar\.google\./, rows: '#gsc_a_b .gsc_a_tr', title: '.gsc_a_at', authors: '.gs_gray', distinctive: true },
+    { host: /scholar\.google\./, rows: '#gs_res_ccl_mid .gs_r.gs_or', title: '.gs_rt', authors: '.gs_a', distinctive: true },
+    { host: /pubmed\.ncbi\.nlm\.nih\.gov/, rows: 'article.full-docsum', title: '.docsum-title', authors: '.docsum-authors', distinctive: true },
+    { host: /(bio|med)rxiv\.org/, rows: '.highwire-article-citation', title: '.highwire-cite-title', authors: '.highwire-citation-authors', distinctive: true },
+    { host: /europepmc\.org/, rows: '.resultList > li', title: '.title', authors: '.authors' },
+    { host: /semanticscholar\.org/, rows: '[data-test-id="search-result"]', title: '[data-test-id="title-link"]', authors: '[data-test-id="author-list"]' },
+    { host: /sciencedirect\.com\/search/, rows: '.ResultItem', title: '.result-list-title-link', authors: '.Authors' },
   ];
 
   // `distinctive: true` marks a rows-selector specific enough to identify the
@@ -553,9 +592,15 @@
   function tooltip(state, info) {
     const age = `index built ${ageString(info.builtAt)}, checked ${ageString(info.checkedAt)}`;
     switch (state) {
-      case STATE.HIT: return info.via === 'title'
-        ? `In Zotero — exact title match (no DOI on this page)\n${age}\nClick to open in Zotero`
-        : `In Zotero — DOI match (${info.doi})\n${age}\nClick to open in Zotero`;
+      case STATE.HIT: {
+        if (info.via === 'title+author') {
+          return `In Zotero — title match confirmed by an author on this page\n${age}\nClick to open in Zotero`;
+        }
+        if (info.via === 'title') {
+          return `In Zotero — exact title match (no DOI on this page)\n${age}\nClick to open in Zotero`;
+        }
+        return `In Zotero — DOI match (${info.doi})\n${age}\nClick to open in Zotero`;
+      }
       case STATE.TITLE: return `Probably in Zotero — title match, but the title is short enough to collide\n${age}\nClick to open in Zotero`;
       case STATE.MISS: return `Not in Zotero (${info.doi || 'no DOI found'})\n${age}`;
       default: return `Unknown — ${info.reason || 'Zotero not reachable'}\n${age}`;
@@ -633,7 +678,7 @@
     return t.split(' ').filter(Boolean).length >= TITLE_GREEN_MIN_WORDS;
   }
 
-  function decide(doi, title, index) {
+  function decide(doi, title, index, pageAuthors) {
     if (!index) return { state: STATE.UNKNOWN, reason: 'index not built yet' };
     // An index that cannot answer "absent" must never say "absent". A truncated or
     // empty mirror still answers "present" correctly, so hits are kept.
@@ -647,8 +692,15 @@
       // Scholar row at amber made amber the only colour that page could ever show,
       // which is no signal at all. Short or generic titles ("Editorial",
       // "Introduction", "Corrigendum") collide across papers and stay amber.
-      const state = titleIsDistinctive(t) ? STATE.HIT : STATE.TITLE;
-      return { state, key: titleKey, doi, via: 'title' };
+      if (titleIsDistinctive(t)) return { state: STATE.HIT, key: titleKey, doi, via: 'title' };
+      // A short title alone collides, but a short title PLUS an author printed on
+      // the page is a different claim entirely. "Autism spectrum disorder" is
+      // shared by many works; "Autism spectrum disorder" by an author list
+      // containing Lord and Dumas is the one in the library.
+      if (authorsCorroborate(lookupKey(index.creatorMap, titleKey), pageAuthors)) {
+        return { state: STATE.HIT, key: titleKey, doi, via: 'title+author' };
+      }
+      return { state: STATE.TITLE, key: titleKey, doi, via: 'title' };
     }
     if (index.unusable) {
       return { state: STATE.UNKNOWN, reason: index.unusableReason || 'index incomplete', doi };
@@ -679,7 +731,11 @@
         const anchors = findDoiAnchors(row);
         const doi = anchors.length ? anchors[0].doi : '';
         const titleText = titleEl.textContent || '';
-        const verdict = decide(doi, titleText, index);
+        // The author line printed under the row corroborates a short title match
+        // that would otherwise be too generic to call green.
+        const authorEl = adapter.authors ? row.querySelector(adapter.authors) : null;
+        const authorText = authorEl ? authorEl.textContent || '' : '';
+        const verdict = decide(doi, titleText, index, authorText);
         const target = anchors.length ? anchors[0].node : titleEl;
         placeDot(target, verdict.state, { ...info0, ...verdict },
           doi || normalizeTitle(titleText) || 'row');
@@ -743,11 +799,12 @@
     return !!meta && meta.complete === true && (meta.doiCount + meta.titleCount) > 0;
   }
 
-  function makeIndex(meta, doiMap, titleMap) {
+  function makeIndex(meta, doiMap, titleMap, creatorMap) {
     const usable = indexIsUsable(meta);
     return {
       doiMap,
       titleMap,
+      creatorMap: creatorMap || Object.create(null),
       unusable: !usable,
       unusableReason: usable ? ''
         : (meta && meta.complete !== true
@@ -762,7 +819,8 @@
     const doiMap = await gm.get(K_DOI, null);
     if (!doiMap) return { meta: null, index: null };
     const titleMap = await gm.get(K_TITLE, {});
-    return { meta, index: makeIndex(meta, doiMap, titleMap) };
+    const creatorMap = await gm.get(K_CREATORS, {});
+    return { meta, index: makeIndex(meta, doiMap, titleMap, creatorMap) };
   }
 
   async function main() {
@@ -844,6 +902,7 @@
   const testable = {
     normalizeDoi, normalizeTitle, findDoisInText, foldItems, decide, ageString, SKIP_TYPES,
     asItemArray, asVersionsObject, lookupKey, indexIsUsable, makeIndex,
+    creatorSurnames, authorsCorroborate,
     titleIsDistinctive,
   };
   if (typeof module !== 'undefined' && module.exports) {

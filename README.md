@@ -34,8 +34,9 @@ The library is a versioned set exposed as an append stream. `Last-Modified-Versi
 | Requests for a full build | **18** (`limit=500`) |
 | Full build time | **3.2 s** |
 | DOIs indexed | 5,633 |
-| Titles indexed (**every** item, not just DOI-less) | 8,171 |
-| Cached index size | **0.83 MB** |
+| Titles indexed (**every** item, not just DOI-less) | 8,172 |
+| Creator surnames indexed | 8,261 |
+| Cached index size | **1.12 MB** |
 | Cost of a "has anything changed?" check | one request returning `{}` |
 
 Membership then becomes an in-memory set lookup. Painting a dot costs zero network requests, which is what makes twenty dots on a Google Scholar results page reasonable.
@@ -55,7 +56,7 @@ Membership then becomes an in-memory set lookup. Painting a dot costs zero netwo
 |---|---|
 | 🟢 **Green** | The paper is in your library — matched by DOI, or by an exact match on a distinctive title (≥25 characters and ≥4 words) when the page carries no DOI. The tooltip says which. Click to open the item in Zotero. |
 | 🔴 **Red** | The DOI is **not** in your library, and the index is present and fresh. |
-| 🟠 **Amber** | A title match on a title too short or generic to trust — `Editorial`, `Introduction`, `Corrigendum`. Titles like that collide across papers, so the match is offered rather than asserted. Click to open it. |
+| 🟠 **Amber** | A title match on a title too short or generic to trust, *and* no author on the page corroborated it — `Editorial`, `Introduction`, `Corrigendum`. Titles like that collide across papers, so the match is offered rather than asserted. Click to open it. |
 | ⚪ **Grey (dashed)** | **Unknown.** Zotero isn't running, or the index hasn't been built yet. |
 
 Grey exists because a red dot while Zotero is closed would assert "you don't have this paper" when the truth is "I can't know." Hover any dot for its state, the matched Zotero key, and how old the index is.
@@ -88,6 +89,8 @@ DOIs inside reference lists are excluded — Nature, eNeuro and bioRxiv article 
 Google Scholar, PubMed search, bioRxiv/medRxiv search, Europe PMC, Semantic Scholar and ScienceDirect search get one dot per result row.
 
 **Google Scholar carries no DOI anywhere** — not per row, not in meta tags (verified: zero occurrences of `doi.org` in the served HTML). Rows there are matched on **normalized title**, which is why every item's title is indexed, including items that have a DOI. A title match shows **amber**, not green: it says "a paper with this exact title is in your library", which is weaker evidence than a DOI match and deserves to look different.
+
+**Author corroboration.** A short title alone collides — `Autism spectrum disorder` is shared by reviews, chapters and encyclopedia entries. But a short title *plus* an author printed on the page is a different claim entirely. Every item's creator surnames are indexed, and when a result row's author line contains one of them, a short title match is promoted from amber to green. Verified on two rows carrying the identical title in one document: the row listing `C Lord, TS Brugha, G Dumas, …` renders green, the row listing `A Nobody, B Someone` stays amber. Promotion only — a failed author check never downgrades a match that was already trustworthy.
 
 A distinctive title match shows **green**, same as a DOI match, because an exact match on a long multi-word title is strong evidence and Scholar offers nothing stronger. Holding every Scholar row at amber made amber the only colour that page could ever display, which carried no information. Short generic titles stay amber.
 
