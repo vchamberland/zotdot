@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.5.0
+// @version      0.6.0
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @match        *://*/*
@@ -555,19 +555,43 @@
 
   // ──────────────────────────────────────────────────────────── page: rendering
 
+  // Glossy indicator-lamp styling: a specular highlight up and left, a shading
+  // wash down and right, and a coloured halo. Two things keep it usable rather
+  // than merely decorative — the halo is sized in em so it scales with the host
+  // page's type, and `unknown` is deliberately an UNLIT lamp (dim, no halo), so
+  // "I could not check" never looks like a confident answer.
   const CSS = `
   .zotdot {
-    display: inline-block; width: .62em; height: .62em;
-    min-width: 8px; min-height: 8px;
-    border-radius: 50%; margin: 0 .35em; padding: 0;
-    vertical-align: baseline; border: 1px solid rgba(0,0,0,.28);
-    box-shadow: 0 0 0 1px rgba(255,255,255,.55);
-    cursor: default; flex: none; line-height: 1;
+    display: inline-block; width: .72em; height: .72em;
+    min-width: 10px; min-height: 10px;
+    border-radius: 50%; margin: 0 .4em; padding: 0;
+    vertical-align: baseline; border: 0; line-height: 1;
+    cursor: default; flex: none;
+    background-repeat: no-repeat;
+    background-image:
+      radial-gradient(circle at 34% 27%, rgba(255,255,255,.92) 0%, rgba(255,255,255,.38) 26%, rgba(255,255,255,0) 56%),
+      radial-gradient(circle at 52% 118%, rgba(0,0,0,.42) 0%, rgba(0,0,0,0) 62%);
   }
-  .zotdot[data-zotdot="hit"]     { background: #16a34a; }
-  .zotdot[data-zotdot="miss"]    { background: #dc2626; }
-  .zotdot[data-zotdot="title"]   { background: #d97706; }
-  .zotdot[data-zotdot="unknown"] { background: transparent; border-style: dashed; border-color: #9ca3af; }
+  .zotdot[data-zotdot="hit"] {
+    background-color: #5ec927;
+    box-shadow: 0 0 .42em .07em rgba(126,224,33,.72), inset 0 0 .2em rgba(255,255,255,.4), 0 0 0 1px rgba(0,0,0,.16);
+  }
+  .zotdot[data-zotdot="miss"] {
+    background-color: #ef3124;
+    box-shadow: 0 0 .42em .07em rgba(239,49,36,.68), inset 0 0 .2em rgba(255,255,255,.35), 0 0 0 1px rgba(0,0,0,.16);
+  }
+  .zotdot[data-zotdot="title"] {
+    background-color: #f97116;
+    box-shadow: 0 0 .42em .07em rgba(249,113,22,.7), inset 0 0 .2em rgba(255,255,255,.38), 0 0 0 1px rgba(0,0,0,.16);
+  }
+  .zotdot[data-zotdot="unknown"] {
+    background-color: #6b7280;
+    background-image:
+      radial-gradient(circle at 34% 27%, rgba(255,255,255,.45) 0%, rgba(255,255,255,.12) 30%, rgba(255,255,255,0) 58%),
+      radial-gradient(circle at 52% 118%, rgba(0,0,0,.5) 0%, rgba(0,0,0,0) 62%);
+    box-shadow: inset 0 0 .2em rgba(0,0,0,.45), 0 0 0 1px rgba(0,0,0,.22);
+    opacity: .72;
+  }
   .zotdot[data-zotdot="hit"], .zotdot[data-zotdot="title"] { cursor: pointer; }
   `;
 

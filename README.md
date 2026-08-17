@@ -61,6 +61,8 @@ Membership then becomes an in-memory set lookup. Painting a dot costs zero netwo
 
 Grey exists because a red dot while Zotero is closed would assert "you don't have this paper" when the truth is "I can't know." Hover any dot for its state, the matched Zotero key, and how old the index is.
 
+The dots are drawn as small indicator lamps — a specular highlight up and left, a shading wash down and right, and a coloured halo. Two details keep that from being purely decorative: the halo is sized in `em`, so it scales with whatever type size the host page uses, and the unknown state is rendered as an **unlit** lamp (dim, no halo). "I could not check" must never look like a confident answer.
+
 ## Where the dot goes
 
 On an **article page**, the dot is placed on the **article title** — and nowhere else. The title is the anchor that always works: on BMC and Springer the only visible DOI sits in a citation block at the very bottom of the article, where a dot answers the question long after you have scrolled past asking it.
