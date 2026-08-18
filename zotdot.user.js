@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.6.0
+// @version      0.7.0
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @match        *://*/*
@@ -871,12 +871,12 @@
       if (!index) {
         const built = await buildIndex();
         meta = built.meta;
-        index = makeIndex(built.meta, built.doiMap, built.titleMap);
+        index = makeIndex(built.meta, built.doiMap, built.titleMap, built.creatorMap);
       } else if (Date.now() - (meta.checkedAt || 0) > REFRESH_INTERVAL_MS) {
         const refreshed = await refreshIndex(meta);
         if (refreshed) {
           meta = refreshed.meta;
-          index = makeIndex(refreshed.meta, refreshed.doiMap, refreshed.titleMap);
+          index = makeIndex(refreshed.meta, refreshed.doiMap, refreshed.titleMap, refreshed.creatorMap);
         } else {
           meta = { ...meta, checkedAt: Date.now() };
         }
@@ -892,30 +892,72 @@
 
     // Inserting a dot is itself a childList mutation, so the observer would
     // re-enter on its own output. Detaching around each scan makes that
-    // structurally impossible rather than merely unlikely.
+    // structurally impossible rather than merely unlikely. The same disconnect/
+    // reconnect discipline is shared with the live poller below through rescan().
     const target = document.body || document.documentElement;
     const observeOpts = { childList: true, subtree: true };
     let scanning = false;
-    const observer = new MutationObserver(() => {
+    let observer;
+    function rescan() {
+      if (scanning) return;
+      scanning = true;
+      if (observer) observer.disconnect();
+      try { scan(index, meta); } finally {
+        scanning = false;
+        if (observer) observer.observe(target, observeOpts);
+      }
+    }
+    observer = new MutationObserver(() => {
       if (scanning) return;
       clearTimeout(observer._t);
-      observer._t = setTimeout(() => {
-        scanning = true;
-        observer.disconnect();
-        try { scan(index, meta); } finally {
-          scanning = false;
-          observer.observe(target, observeOpts);
-        }
-      }, 300);
+      observer._t = setTimeout(rescan, 300);
     });
     observer.observe(target, observeOpts);
+
+    // ── Live refresh: keep the dots current without waiting on a page reload.
+    // The userscript cannot be *pushed* to when an item is saved to Zotero —
+    // Zotero is a separate process with no channel into the page — so the closest
+    // achievable "check when an item is added" is a cheap poll of the same since=
+    // check main() runs on load: one request that returns {} when nothing changed
+    // (the common case, at zero further cost). Two triggers, both gated on the tab
+    // being visible so only the paper Vincent is actually looking at ever polls:
+    //   • the tab regaining focus — exactly the shape of "saved to Zotero, then
+    //     switched back to the page"; the dot updates the instant he returns.
+    //   • a short interval — the backstop for a Connector save that never blurs
+    //     the tab, so an item added while the page stays open still lands.
+    const LIVE_POLL_MS = 15000;
+    let refreshing = false;
+    async function liveRefresh() {
+      if (refreshing || !index || document.visibilityState !== 'visible') return;
+      refreshing = true;
+      try {
+        const refreshed = await refreshIndex(meta);
+        if (refreshed) {
+          meta = refreshed.meta;
+          index = makeIndex(refreshed.meta, refreshed.doiMap, refreshed.titleMap, refreshed.creatorMap);
+          rescan();
+        } else {
+          meta = { ...meta, checkedAt: Date.now() };
+        }
+      } catch (e) {
+        // Zotero went away mid-session — keep the last good dots and retry next
+        // tick, exactly as main() leaves grey dots grey on an unreachable Zotero.
+      } finally {
+        refreshing = false;
+      }
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') liveRefresh();
+    });
+    window.addEventListener('focus', liveRefresh);
+    setInterval(liveRefresh, LIVE_POLL_MS);
 
     try {
       if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('zotdot: rebuild index', async () => {
           const built = await buildIndex();
           console.info('[zotdot] rebuilt:', built.meta);
-          scan(makeIndex(built.meta, built.doiMap, built.titleMap), built.meta);
+          scan(makeIndex(built.meta, built.doiMap, built.titleMap, built.creatorMap), built.meta);
         });
         GM_registerMenuCommand('zotdot: show index status', async () => {
           const m = await gm.get(K_META, null);
