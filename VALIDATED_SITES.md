@@ -39,9 +39,9 @@ per result row).
 |------|-------------|----------|-------|
 | Google Scholar | https://scholar.google.ca/scholar?q=hyperscanning | 2026-08-18 | one dot per result row |
 
-## Work in progress
+## Backlog
 
-Sites checked but not working yet — diagnosis noted for follow-up.
+Sites checked but not working yet — deferred until further notice; diagnosis noted for whenever they're picked up.
 
 - **HAL** (`hal.science`) — single-page app; at page load it exposes neither a DOI nor `citation_*` meta in the DOM (only a server-rendered `<h1 id="title">`), so zotdot cannot identify the paper. Needs a HAL-specific adapter that reads its metadata. (as of v0.8.3)
 - **Google Scholar — citation view** (`scholar.google.*/citations?view_op=view_citation`) — the single-publication detail page, a different layout from the profile table. Scholar exposes no DOI, so it can only be matched by title (`#gsc_oci_title`). Needs a dedicated adapter; hard to verify because Scholar serves a captcha to non-browser fetches. (as of v0.8.4)
