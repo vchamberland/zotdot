@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.0
+// @version      0.8.1
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @match        *://*/*
@@ -38,7 +38,7 @@
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
   // Must NOT contain "Mozilla/" — see the note in gm.request().
-  const UA = 'zotdot/0.8.0 (local Zotero client)';
+  const UA = 'zotdot/0.8.1 (local Zotero client)';
   // Bumped to 4 when the index gained a creator-surname map, used to corroborate
   // a short title match against the authors printed on the page. An older cache
   // has no creator data, so it is discarded and rebuilt rather than trusted.
@@ -881,39 +881,22 @@
     injectCss();
 
     let { meta, index } = await loadIndex();
-    const provisional = meta || { builtAt: 0, checkedAt: 0 };
+    if (!meta) meta = { builtAt: 0, checkedAt: 0 }; // never let a scan hit a null meta
 
     // Paint immediately with whatever we have — grey if that is nothing — so the
     // dot never waits on the network.
-    scan(index, provisional);
-
-    try {
-      if (!index) {
-        const built = await buildIndex();
-        meta = built.meta;
-        index = makeIndex(built.meta, built.doiMap, built.titleMap, built.creatorMap);
-      } else if (Date.now() - (meta.checkedAt || 0) > REFRESH_INTERVAL_MS) {
-        const refreshed = await refreshIndex(meta);
-        if (refreshed) {
-          meta = refreshed.meta;
-          index = makeIndex(refreshed.meta, refreshed.doiMap, refreshed.titleMap, refreshed.creatorMap);
-        } else {
-          meta = { ...meta, checkedAt: Date.now() };
-        }
-      }
-    } catch (e) {
-      // Zotero closed, port refused, timeout. Leave the grey dots grey — a red
-      // dot here would assert "not in your library" when we simply cannot know.
-      console.info('[zotdot] Zotero unreachable:', e.message);
-      return;
-    }
-
     scan(index, meta);
 
-    // Inserting a dot is itself a childList mutation, so the observer would
-    // re-enter on its own output. Detaching around each scan makes that
-    // structurally impossible rather than merely unlikely. The same disconnect/
-    // reconnect discipline is shared with the live poller below through rescan().
+    // Install the observer BEFORE the (multi-second) build below, not after it.
+    // Journal pages hydrate and re-render while the index builds; with no observer
+    // watching yet, the page can remove the freshly-painted grey dot and nothing
+    // re-adds it until the build finishes — the dot visibly blinks out and comes
+    // back green. With the observer live from the start, every re-render re-paints:
+    // grey while `index` is still null, the real verdict once the build resolves it
+    // (rescan reads the `index`/`meta` closures, which the build reassigns below).
+    // Inserting a dot is itself a childList mutation, so each scan is wrapped in a
+    // disconnect/reconnect + `scanning` guard to stop the observer re-entering on
+    // its own output; the live poller below shares that discipline through rescan.
     const target = document.body || document.documentElement;
     const observeOpts = { childList: true, subtree: true };
     let scanning = false;
@@ -933,6 +916,32 @@
       observer._t = setTimeout(rescan, 300);
     });
     observer.observe(target, observeOpts);
+
+    try {
+      if (!index) {
+        const built = await buildIndex();
+        meta = built.meta;
+        index = makeIndex(built.meta, built.doiMap, built.titleMap, built.creatorMap);
+      } else if (Date.now() - (meta.checkedAt || 0) > REFRESH_INTERVAL_MS) {
+        const refreshed = await refreshIndex(meta);
+        if (refreshed) {
+          meta = refreshed.meta;
+          index = makeIndex(refreshed.meta, refreshed.doiMap, refreshed.titleMap, refreshed.creatorMap);
+        } else {
+          meta = { ...meta, checkedAt: Date.now() };
+        }
+      }
+    } catch (e) {
+      // Zotero closed, port refused, timeout. Leave the grey dots grey — a red
+      // dot here would assert "not in your library" when we simply cannot know.
+      // The observer is already installed, so grey dots survive page re-renders.
+      console.info('[zotdot] Zotero unreachable:', e.message);
+      return;
+    }
+
+    // Repaint with the resolved verdict through rescan(), so the observer does not
+    // re-fire on this scan's own inserted dots.
+    rescan();
 
     // ── Live refresh: keep the dots current without waiting on a page reload.
     // The userscript cannot be *pushed* to when an item is saved to Zotero —
