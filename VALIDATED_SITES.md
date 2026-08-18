@@ -49,8 +49,8 @@ Sites checked but not working yet — deferred until further notice; diagnosis n
 ## Roadmap — not yet validated
 
 **Search / results surfaces** zotdot carries adapters for but that aren't
-confirmed on a live page yet: Google Scholar (search results), PubMed search,
-bioRxiv / medRxiv search, Europe PMC, Semantic Scholar, ScienceDirect search.
+confirmed on a live page yet: PubMed search, bioRxiv / medRxiv search,
+Europe PMC, Semantic Scholar, ScienceDirect search.
 
 **Known unverified:** Google Scholar profile ("citations") pages — the selectors
 come from prior knowledge, not a live check, because Scholar serves a captcha to

@@ -66,3 +66,16 @@ The userscript-manager menu exposes:
 ## Scope
 
 Read-only: no writes to Zotero. Loopback only: no cloud API, no Crossref, no telemetry. "Has the paper" and "has the PDF" are distinct questions; PDF-attachment state is not tracked.
+
+## Permissions
+
+- `@match *://*/*` — the script runs on every page so it can detect papers on any publisher or search site without a per-site allowlist. On a page that is not a paper it exits after a cheap check and does nothing further.
+- `@connect 127.0.0.1` — the only network destination is the Zotero local API on loopback; no other host is contacted.
+- `GM_xmlhttpRequest` — issues the loopback GET requests to Zotero (also required to set the non-browser User-Agent Zotero's API demands; see Troubleshooting).
+- `GM_getValue` / `GM_setValue` — store and read the cached index in userscript storage.
+- `GM_addStyle` — inject the dot styling.
+- `GM_registerMenuCommand` — register the rebuild / status menu commands.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
