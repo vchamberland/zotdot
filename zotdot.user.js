@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.2
+// @version      0.8.3
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @updateURL    http://127.0.0.1:8791/zotdot.user.js
@@ -40,7 +40,7 @@
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
   // Must NOT contain "Mozilla/" — see the note in gm.request().
-  const UA = 'zotdot/0.8.2 (local Zotero client)';
+  const UA = 'zotdot/0.8.3 (local Zotero client)';
   // Bumped to 4 when the index gained a creator-surname map, used to corroborate
   // a short title match against the authors printed on the page. An older cache
   // has no creator data, so it is discarded and rebuilt rather than trusted.
@@ -460,6 +460,7 @@
     'h1.article-title',              // HighWire (eNeuro, bioRxiv)
     'h1#screen-reader-main-title',   // ScienceDirect
     'h1.title-text',                 // Wiley
+    'h1.title',                      // arXiv — its first bare h1 is the subject category, not the paper
     'h1',
   ];
 
@@ -840,7 +841,30 @@
     if (metaDoi(document)) return true;
     if (activeAdapter()) return true;
     if (document.querySelector('a[href*="doi.org/"]')) return true;
+    // A citation_title alone marks a paper page even when it carries no DOI (HAL
+    // posters, some SPAs) — scan()'s title path can still answer for it.
+    if (document.querySelector('meta[name="citation_title" i]')) return true;
     return false;
+  }
+
+  // Single-page academic sites (IEEE Xplore, HAL, many publisher apps) render the
+  // paper markers — citation meta, the title, the DOI link — client-side, AFTER
+  // document-idle. A one-shot check bails before they exist and never comes back,
+  // which is why those sites showed no dot at all. So when the page is not yet a
+  // paper, poll a few times on a short schedule before giving up. This is NOT a
+  // persistent observer: the @match is *://*/*, so this runs on every page, and a
+  // plain non-paper page must stop quickly rather than watch forever. A handful of
+  // cheap checks costs nothing there and still catches a slow SPA.
+  function ensureLooksLikeAPaper() {
+    if (pageLooksLikeAPaper()) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let tries = 0;
+      const MAX_TRIES = 12; // ~9s at 750ms
+      const id = setInterval(() => {
+        if (pageLooksLikeAPaper()) { clearInterval(id); resolve(true); }
+        else if (++tries >= MAX_TRIES) { clearInterval(id); resolve(false); }
+      }, 750);
+    });
   }
 
   // A mirror may only answer "not in your library" when it is known to cover the
@@ -877,8 +901,9 @@
 
   async function main() {
     // The @match is *://*/* so this runs everywhere. Bail before touching storage
-    // or the network on the overwhelming majority of pages that are not papers.
-    if (!pageLooksLikeAPaper()) return;
+    // or the network on the overwhelming majority of pages that are not papers —
+    // but give SPAs a few seconds to render their paper markers before giving up.
+    if (!(await ensureLooksLikeAPaper())) return;
 
     injectCss();
 
