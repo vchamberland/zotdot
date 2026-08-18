@@ -1,6 +1,6 @@
 # zotdot
 
-A small coloured dot next to a paper's DOI telling you whether it is **already in your Zotero library**.
+A small coloured dot next to a paper's DOI telling you whether it is **already in your Zotero library** — on publisher pages, PubMed, Google Scholar, bioRxiv and other search results.
 
 ```
 Secure wireless communication of brain–computer interface data
@@ -8,166 +8,77 @@ https://doi.org/10.1038/s41467-025-63326-0  ●   ← green: you have it
 https://doi.org/10.1038/s41586-099-99999-9  ●   ← red: you don't
 ```
 
-Runs in **Violentmonkey** (also works in Tampermonkey — it deliberately avoids Tampermonkey-only APIs). Single file, no build step, no dependencies, no server.
-
----
-
-## Why it works the way it does
-
-The obvious implementation is to ask Zotero: `GET /api/users/0/items?q=<doi>`. **That does not work.** Zotero 9.0.6's local API silently ignores the `q=` parameter — verified on a live 31,217-item library:
-
-| Query | Results returned |
-|---|---|
-| `q=10.1038/s41467-025-63326-0` (a DOI that exists) | 100 of 100 requested |
-| `q=zzzqqqxxx-nonsense-42` | 100 of 100 requested |
-| `q=` (empty) | 100 of 100 requested |
-
-Identical pages every time. `qmode=titleCreatorYear` returns zero for a real DOI; `qmode=everything` returns whatever fills the page. Better BibTeX's JSON-RPC dispatches correctly (a bogus method name returns `-32601`) but `item.search("10.1038/s41467-025-63326-0")` returns `[]` for an item that provably exists.
-
-There is no working search oracle to call. So zotdot doesn't search — **it mirrors.**
-
-The library is a versioned set exposed as an append stream. `Last-Modified-Version` is the cursor, `since=` is the delta, and `/items/top` excludes attachments and notes structurally. Measured on a real library:
-
-| | |
-|---|---|
-| Top-level items | 8,638 |
-| Requests for a full build | **18** (`limit=500`) |
-| Full build time | **3.2 s** |
-| DOIs indexed | 5,633 |
-| Titles indexed (**every** item, not just DOI-less) | 8,172 |
-| Creator surnames indexed | 8,261 |
-| Cached index size | **1.12 MB** |
-| Cost of a "has anything changed?" check | one request returning `{}` |
-
-Membership then becomes an in-memory set lookup. Painting a dot costs zero network requests, which is what makes twenty dots on a Google Scholar results page reasonable.
-
-## Install
-
-1. Install [Violentmonkey](https://violentmonkey.github.io/).
-2. Make sure Zotero is **running** and its local API is enabled:
-   Zotero → Settings → Advanced → *Allow other applications on this computer to communicate with Zotero*.
-   Confirm with `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:23119/api/users/0/items/top?limit=1` → `200`.
-3. Open `zotdot.user.js` in the browser (or drag it onto the Violentmonkey dashboard) and confirm the install.
-4. Visit any paper. The first paper page you open builds the index (~4 s, once); every page after that is instant.
+One userscript. No build step, no dependencies, no server, no telemetry. Your DOIs never leave the machine.
 
 ## The four states
 
 | Dot | Meaning |
 |---|---|
-| 🟢 **Green** | The paper is in your library — matched by DOI, or by an exact match on a distinctive title (≥25 characters and ≥4 words) when the page carries no DOI. The tooltip says which. Click to open the item in Zotero. |
-| 🔴 **Red** | The DOI is **not** in your library, and the index is present and fresh. |
-| 🟠 **Amber** | A title match on a title too short or generic to trust, *and* no author on the page corroborated it — `Editorial`, `Introduction`, `Corrigendum`. Titles like that collide across papers, so the match is offered rather than asserted. Click to open it. |
-| ⚪ **Grey (dashed)** | **Unknown.** Zotero isn't running, or the index hasn't been built yet. |
+| 🟢 **Green** | In your library — matched by DOI, or by an exact match on a distinctive title when the page carries no DOI. Click to open the item in Zotero. |
+| 🔴 **Red** | The DOI is **not** in your library, and the index is present and complete. |
+| 🟠 **Amber** | A title match too short or generic to trust (`Editorial`, `Introduction`), with no author on the page to corroborate it. Offered, not asserted. Click to open. |
+| ⚪ **Grey (dashed)** | **Unknown** — Zotero isn't running, or the index hasn't been built yet. A red dot while Zotero is closed would assert "you don't have this" when the truth is "I can't know." |
 
-Grey exists because a red dot while Zotero is closed would assert "you don't have this paper" when the truth is "I can't know." Hover any dot for its state, the matched Zotero key, and how old the index is.
+Hover any dot for its state, the matched Zotero key, and how fresh the index is.
 
-The dots are drawn as small indicator lamps — a specular highlight up and left, a shading wash down and right, and a coloured halo. Two details keep that from being purely decorative: the halo is sized in `em`, so it scales with whatever type size the host page uses, and the unknown state is rendered as an **unlit** lamp (dim, no halo). "I could not check" must never look like a confident answer.
+## Install
+
+The script is plain browser JavaScript talking to Zotero over loopback, so it works **identically on Linux, macOS and Windows**. The steps are the same everywhere:
+
+1. **Install a userscript manager** — [Violentmonkey](https://violentmonkey.github.io/) (recommended) or Tampermonkey, in any Chromium browser (Chrome, Edge, Brave) or Firefox.
+2. **Enable Zotero's local API.** Zotero → **Settings → Advanced → Allow other applications on this computer to communicate with Zotero.** (Same menu on all three OSes. Requires Zotero 7 or newer; tested against Zotero 10.)
+3. **Install the script** — open [`zotdot.user.js`](zotdot.user.js) raw and confirm the install prompt, or drag the file onto the Violentmonkey dashboard.
+4. **Visit any paper.** The first paper page builds the index (a few seconds, once); every page after that is instant.
+
+Optional check that the API is reachable — the command is the same on macOS, Linux, and Windows 10+ (PowerShell or CMD, which now ship `curl`):
+
+```
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:23119/api/users/0/items/top?limit=1
+```
+
+`200` means good. `zotdot: show index status` in the userscript-manager menu confirms the script's own view.
+
+> **Same machine only.** The browser and Zotero must run on the same computer — zotdot talks to `127.0.0.1` and nothing else.
+
+## How it works
+
+Zotero's local API has no working DOI search: querying a real DOI, a nonsense string, or nothing at all returns the same page of items. So zotdot doesn't search — **it mirrors.** The library is a versioned set exposed as an append stream (`Last-Modified-Version` as the cursor, `since=` for the delta), so building a local index of every DOI, title and author surname takes ~18 requests once, and membership is then an in-memory set lookup with zero network cost per dot. That's what makes twenty dots on a Google Scholar page reasonable.
+
+**Live updates.** After a page loads, zotdot keeps the dots current without a reload: it re-checks the moment the tab regains focus — the exact shape of *"saved to Zotero, switched back to the page"* — and polls the cheap change-check every 15 seconds as a backstop, only while the tab is visible. Save a paper to Zotero and its dot turns green within seconds. (A userscript can't be *pushed to* by Zotero, so this is a cheap poll, not a live socket — but in practice the dot updates as fast as you can look back at the page.)
 
 ## Where the dot goes
 
-On an **article page**, the dot is placed on the **article title** — and nowhere else. The title is the anchor that always works: on BMC and Springer the only visible DOI sits in a citation block at the very bottom of the article, where a dot answers the question long after you have scrolled past asking it.
-
-The DOI is still read, and is still *preferred* for matching — this governs placement only. A visible DOI is badged just in the case where the title could not carry the verdict: a page with a bare DOI and no article metadata, such as a lab's publication list or a PDF landing page. Never both, so the same answer never appears twice a few centimetres apart.
-
-The title element is located by publisher class first — `h1.c-article-title` (BMC/Springer), `h1[data-test="article-title"]`, `h1.citation__title` (ACS), `h1.article-title` (HighWire), `h1#screen-reader-main-title` (ScienceDirect), `h1.title-text` (Wiley) — falling back to a bare `h1`. The ordering matters: a bare `h1` on some publishers is the journal name or a site banner, not the paper.
-
-On a **results page**, each row gets exactly one dot and the title-level rule does not apply.
-
-## Where the DOI comes from
-
-Tried in order, based on a survey of Nature, PLOS, Frontiers, bioRxiv, eNeuro and arXiv article pages:
-
-1. `meta[name="citation_doi"]` — present on every publisher surveyed **except arXiv**
-2. `meta[name="bepress_citation_doi"]`
-3. `meta[name="dc.identifier"]` — bare on PLOS/eNeuro/bioRxiv, `doi:`-prefixed on Nature/Frontiers; both are normalized
-4. `meta[name="prism.doi"]`
-5. `a#arxiv-doi-link`, else `citation_arxiv_id` → `10.48550/arXiv.<id>` (arXiv ships no `citation_doi` at all)
-6. JSON-LD `application/ld+json` (a redundant carrier on Nature and Frontiers)
-7. A visible `a[href*="doi.org/"]`
-8. A `10.\d{4,9}/…` regex over visible text (Nature prints its DOI as plain text, not a link)
-
-DOIs inside reference lists are excluded — Nature, eNeuro and bioRxiv article pages all carry dozens of `doi.org` links to *cited* works, and badging those would answer a question you didn't ask.
-
-## Multi-result pages
-
-Google Scholar, PubMed search, bioRxiv/medRxiv search, Europe PMC, Semantic Scholar and ScienceDirect search get one dot per result row.
-
-**Google Scholar carries no DOI anywhere** — not per row, not in meta tags (verified: zero occurrences of `doi.org` in the served HTML). Rows there are matched on **normalized title**, which is why every item's title is indexed, including items that have a DOI. A title match shows **amber**, not green: it says "a paper with this exact title is in your library", which is weaker evidence than a DOI match and deserves to look different.
-
-**Author corroboration.** A short title alone collides — `Autism spectrum disorder` is shared by reviews, chapters and encyclopedia entries. But a short title *plus* an author printed on the page is a different claim entirely. Every item's creator surnames are indexed, and when a result row's author line contains one of them, a short title match is promoted from amber to green. Verified on two rows carrying the identical title in one document: the row listing `C Lord, TS Brugha, G Dumas, …` renders green, the row listing `A Nobody, B Someone` stays amber. Promotion only — a failed author check never downgrades a match that was already trustworthy.
-
-A distinctive title match shows **green**, same as a DOI match, because an exact match on a long multi-word title is strong evidence and Scholar offers nothing stronger. Holding every Scholar row at amber made amber the only colour that page could ever display, which carried no information. Short generic titles stay amber.
-
-Scholar profile ("citations") pages use a different layout from search results — a publication table rather than `.gs_r` blocks — and have their own adapter. **Those two selectors (`#gsc_a_b .gsc_a_tr`, `.gsc_a_at`) are unverified:** scholar.google.com serves a captcha to every non-browser fetch, so they come from prior knowledge rather than a live page. If profile pages stay bare, those two strings are the only thing to correct.
-
-Scholar also prefixes titles with a format tag — `[HTML] Closed-loop brain stimulation`, `[PDF] …`, `[BOOK] …` — which is stripped before matching. Titles are compared on their first 90 normalized characters on both sides, so very long titles match on their prefix.
+On an **article page** the dot lands on the article **title** — the anchor that always works, since some publishers only print the DOI in a citation block at the very foot of the article. On a **search-results page** each row gets exactly one dot. DOIs inside reference lists are ignored — badging cited works would answer a question you didn't ask.
 
 ## Menu commands
 
-Violentmonkey's script menu exposes:
+The userscript-manager menu exposes:
 
 - **zotdot: rebuild index** — force a full rebuild
 - **zotdot: show index status** — DOI count, title count, cursor, index age
 
-## Tests
-
-```bash
-node --check zotdot.user.js     # syntax
-node test/pure.test.cjs         # 29 assertions, pure functions, no network
-node test/live-index.cjs        # integration against your running Zotero
-```
-
-The fixtures deliberately keep the cached index **fresh** (`checkedAt: Date.now()`), so no network call is attempted and `main()` runs its full scan path — initial paint, post-index repaint, and a `MutationObserver` pass. An earlier version dated the fixture index 6 minutes old, which made every run attempt a refresh, fail against the stubbed network, and return after a *single* scan. That hid a duplicate-dot bug that only appears when `scan()` runs more than once. If you change the fixture's `checkedAt`, you lose that coverage.
-
-`live-index.cjs` exercises the same `foldItems()` the userscript uses, over your real library, and checks request count, map population, cursor capture, a known-present DOI resolving, a fabricated DOI not resolving, and `since=` returning empty immediately after a build. It exits `2` if Zotero isn't running.
-
 ## Troubleshooting
 
-### Grey dashed dot: "Unknown — index not built yet"
+**Grey dashed dot — "index not built yet".** The script found the DOI but couldn't reach Zotero. Check Zotero is running and the local API is enabled (step 2 above); the `curl` check should print `200`. Open the browser console (F12) and reload — a line beginning `[zotdot]` names the failure.
 
-The script is running and found the DOI, but it could not reach Zotero. Check in order:
+**`[zotdot] Zotero unreachable: network refused`.** Zotero's local API deliberately refuses anything that looks like a browser (any `Origin` header, or a `Mozilla/` User-Agent) as an anti-DNS-rebinding defence. zotdot sends a non-browser User-Agent so a userscript manager with `webRequest` permission — Violentmonkey and Tampermonkey both qualify — can reach it. If a refusal persists, your manager is adding an `Origin` header it won't let the script strip: try **Firefox with Violentmonkey**, whose build does not.
 
-1. **Is Zotero running?** `curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:23119/api/users/0/items/top?limit=1'` must print `200`. If it prints nothing, start Zotero; if it prints `404`, enable *Settings → Advanced → Allow other applications on this computer to communicate with Zotero*.
-2. **Open the browser console** (F12) on the article page and reload. A line beginning `[zotdot]` names the failure.
+## Tests
 
-### `[zotdot] Zotero unreachable: network refused …`
-
-**Zotero's local API deliberately refuses browsers.** Measured against Zotero 9.0.6, its HTTP server drops the connection (empty reply, no status line) for:
-
-| Request | Result |
-|---|---|
-| no `Origin`, plain User-Agent | **200** |
-| **any** `Origin` header — including empty, `null`, `http://127.0.0.1:23119`, `https://www.zotero.org` | dropped |
-| `User-Agent` containing `Mozilla/` — even with no `Origin` | dropped |
-| `User-Agent: Chrome/151`, `python-requests/2.31`, `zotdot/0.1` | 200 |
-| `Referer` or `X-Requested-With`, no `Origin` | 200 |
-
-This is an anti-DNS-rebinding defence, not a bug: it stops any web page from talking to your library. It also means the client must simply **not look like a browser**, which is why zotdot sends `User-Agent: zotdot/0.1` and `anonymous: true` on every request. Violentmonkey can rewrite those restricted headers because it holds `webRequest` and `declarativeNetRequestWithHostAccess` permissions.
-
-Note that Zotero answers `OPTIONS` with `200` and **no** `Access-Control-Allow-Origin` header — it grants CORS to nobody, so a page-context `fetch` can never work regardless.
-
-If the console still reports a refusal after this, the userscript manager is attaching an `Origin` header that cannot be suppressed from script. Fallbacks, best first:
-
-- **Try Firefox** with Violentmonkey — a different manager build may not add `Origin`.
-- **Run a tiny loopback relay** that accepts browser requests and forwards them to Zotero with the headers stripped. This reintroduces a background process, which v1 deliberately avoided.
-
-### Not the cause: Local Network Access
-
-Chromium 151 does gate loopback behind a per-origin Local Network Access permission (visible in the browser profile as a `local_network` content setting), and `brave://flags#local-network-access-check` disables it globally. On this setup that was **not** the blocker — disabling it changed nothing, and the real cause was the header filtering above. Rule it out quickly rather than dwelling on it.
-
-## Not in v1
-
-- **PDF-attachment state.** "I have the paper" and "I have the PDF" are different questions; the second needs a child-item pass per key.
-- **Writing to Zotero.** No save button, no duplicate merge. Read-only, always.
-- **Any network destination other than `127.0.0.1`.** No cloud API, no Crossref, no telemetry. Your DOIs never leave the machine.
-- **Cross-machine use.** This assumes Zotero runs on the same machine as the browser.
+```
+node --check zotdot.user.js     # syntax
+node test/pure.test.cjs         # pure functions, no network
+node test/live-index.cjs        # integration against your running Zotero (exits 2 if Zotero is down)
+```
 
 ## Files
 
 | Path | What it is |
 |---|---|
 | `zotdot.user.js` | the userscript — the whole product |
-| `ISA.md` | ideal-state artifact: problem, criteria, test strategy, decisions |
-| `test/pure.test.cjs` | pure-function tests (normalization, folding, verdicts) |
-| `test/live-index.cjs` | live integration check against Zotero |
-| `test/fixture/` | offline visual harness with a shimmed `GM_*` environment — `demo.html` (bare DOI page: extraction paths + reference exclusion), `demo-article.html` (metadata present: exactly one dot, on the title), `demo-rows.html` (result rows) |
+| `ISA.md` | design record: problem, criteria, decisions, and the measurements behind them |
+| `test/` | pure-function tests, a live integration check, and an offline visual fixture |
+
+## Scope
+
+Read-only, always — no save button, no writes to Zotero. Loopback only — no cloud API, no Crossref, no telemetry. "I have the paper" and "I have the PDF" are different questions; PDF-attachment state is not tracked.
