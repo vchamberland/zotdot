@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.3
+// @version      0.8.4
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @updateURL    http://127.0.0.1:8791/zotdot.user.js
@@ -40,7 +40,7 @@
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
   // Must NOT contain "Mozilla/" — see the note in gm.request().
-  const UA = 'zotdot/0.8.3 (local Zotero client)';
+  const UA = 'zotdot/0.8.4 (local Zotero client)';
   // Bumped to 4 when the index gained a creator-surname map, used to corroborate
   // a short title match against the authors printed on the page. An older cache
   // has no creator data, so it is discarded and rebuilt rather than trusted.
@@ -406,6 +406,21 @@
     'prism.doi',
   ];
 
+  // IEEE Xplore is an Angular app whose article DOI never appears as a <meta> tag
+  // or a doi.org link — it lives only inside an inline `xplGlobal.document.metadata`
+  // script object, which IS server-rendered and present from the first paint. Read
+  // it there. Gated to the IEEE host so no other page pays for the script scan.
+  function ieeeDoi(root) {
+    if (!/(^|\.)ieeexplore\.ieee\.org$/i.test(location.hostname)) return '';
+    for (const s of root.querySelectorAll('script:not([src])')) {
+      const t = s.textContent;
+      if (!t || t.indexOf('xplGlobal') === -1) continue;
+      const m = t.match(/"doi"\s*:\s*"(10\.\d{4,9}\/[^"\\]+)"/);
+      if (m) { const d = normalizeDoi(m[1]); if (d) return d; }
+    }
+    return '';
+  }
+
   function metaDoi(root) {
     for (const key of META_DOI_KEYS) {
       const nodes = root.querySelectorAll(
@@ -436,6 +451,9 @@
       const hits = findDoisInText(s.textContent);
       if (hits.length) return hits[0];
     }
+    // Site-specific last resort for apps that keep the DOI out of the DOM entirely.
+    const ieee = ieeeDoi(root);
+    if (ieee) return ieee;
     return '';
   }
 
@@ -460,6 +478,7 @@
     'h1.article-title',              // HighWire (eNeuro, bioRxiv)
     'h1#screen-reader-main-title',   // ScienceDirect
     'h1.title-text',                 // Wiley
+    'h1.document-title',             // IEEE Xplore (rendered client-side)
     'h1.title',                      // arXiv — its first bare h1 is the subject category, not the paper
     'h1',
   ];

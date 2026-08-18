@@ -15,6 +15,7 @@ per result row).
 | Site | Example URL | Verified | Notes |
 |------|-------------|----------|-------|
 | Annual Reviews | https://www.annualreviews.org | 2026-08-18 | |
+| arXiv | https://arxiv.org/abs/2505.03308 | 2026-08-18 | dot on the paper title (v0.8.3) |
 | BioRxiv | https://www.biorxiv.org | 2026-08-18 | |
 | BMJ Journals | https://neurologyopen.bmj.com | 2026-08-18 | |
 | Brain Stimulation | https://www.brainstimjrnl.com | 2026-08-18 | |
@@ -36,6 +37,12 @@ per result row).
 | Site | Example URL | Verified | Notes |
 |------|-------------|----------|-------|
 | | | | |
+
+## Work in progress
+
+Sites checked but not working yet — diagnosis noted for follow-up.
+
+- **HAL** (`hal.science`) — single-page app; at page load it exposes neither a DOI nor `citation_*` meta in the DOM (only a server-rendered `<h1 id="title">`), so zotdot cannot identify the paper. Needs a HAL-specific adapter that reads its metadata. (as of v0.8.3)
 
 ## Roadmap — not yet validated
 
