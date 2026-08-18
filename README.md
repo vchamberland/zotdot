@@ -63,22 +63,6 @@ The userscript-manager menu exposes:
 
 **`[zotdot] Zotero unreachable: network refused`.** Zotero's local API deliberately refuses anything that looks like a browser (any `Origin` header, or a `Mozilla/` User-Agent) as an anti-DNS-rebinding defence. zotdot sends a non-browser User-Agent so a userscript manager with `webRequest` permission — Violentmonkey and Tampermonkey both qualify — can reach it. If a refusal persists, your manager is adding an `Origin` header it won't let the script strip: try **Firefox with Violentmonkey**, whose build does not.
 
-## Tests
-
-```
-node --check zotdot.user.js     # syntax
-node test/pure.test.cjs         # pure functions, no network
-node test/live-index.cjs        # integration against your running Zotero (exits 2 if Zotero is down)
-```
-
-## Files
-
-| Path | What it is |
-|---|---|
-| `zotdot.user.js` | the userscript — the whole product |
-| `ISA.md` | design record: problem, criteria, decisions, and the measurements behind them |
-| `test/` | pure-function tests, a live integration check, and an offline visual fixture |
-
 ## Scope
 
 Read-only, always — no save button, no writes to Zotero. Loopback only — no cloud API, no Crossref, no telemetry. "I have the paper" and "I have the PDF" are different questions; PDF-attachment state is not tracked.

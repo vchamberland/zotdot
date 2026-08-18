@@ -1,18 +1,16 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.7.0
+// @version      0.8.0
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @grant        GM_deleteValue
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
 // @connect      127.0.0.1
-// @connect      localhost
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -40,7 +38,7 @@
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
   // Must NOT contain "Mozilla/" — see the note in gm.request().
-  const UA = 'zotdot/0.1 (local Zotero client)';
+  const UA = 'zotdot/0.8.0 (local Zotero client)';
   // Bumped to 4 when the index gained a creator-surname map, used to corroborate
   // a short title match against the authors printed on the page. An older cache
   // has no creator data, so it is discarded and rebuilt rather than trusted.
@@ -244,6 +242,21 @@
     }
   }
 
+  // Remove every DOI, title and creator entry that points at one of `keys`.
+  // foldItems only ADDS, so an item whose DOI or title was corrected in Zotero
+  // would otherwise keep its superseded value in the maps forever — a permanent
+  // false green on any page still showing the old DOI/title. The delta refresh
+  // evicts an edited item's stale entries before folding its fresh copy back in;
+  // pruneDeleted uses the same shape for items that vanished entirely. Mutates the
+  // maps in place. Pure over its inputs — no network, no GM storage.
+  function evictItemKeys(keys, doiMap, titleMap, creatorMap) {
+    const set = keys instanceof Set ? keys : new Set(keys);
+    if (doiMap) for (const [k, v] of Object.entries(doiMap)) if (set.has(v)) delete doiMap[k];
+    if (titleMap) for (const [k, v] of Object.entries(titleMap)) if (set.has(v)) delete titleMap[k];
+    if (creatorMap) for (const k of Object.keys(creatorMap)) if (set.has(k)) delete creatorMap[k];
+    return set;
+  }
+
   async function buildIndex(onProgress) {
     const doiMap = Object.create(null);
     const titleMap = Object.create(null);
@@ -315,6 +328,13 @@
     // missing or empty, folding into a fresh object would persist a handful of
     // items as though they were the whole library — mass false red. Rebuild.
     if (!doiMap || !Object.keys(doiMap).length) return buildIndex();
+
+    // Evict each edited item's OLD DOI/title before folding its fresh copy back
+    // in — foldItems only adds, so a corrected DOI/title in Zotero would leave the
+    // superseded value pointing at the item forever (a false green). New items
+    // have no prior entry, so this is a no-op for them; pruneDeleted (below)
+    // handles items that vanished entirely.
+    evictItemKeys(changed, doiMap, titleMap, creatorMap);
 
     for (let i = 0; i < changed.length; i += 50) {
       const batch = changed.slice(i, i + 50).join(',');
@@ -974,7 +994,7 @@
   const testable = {
     normalizeDoi, normalizeTitle, findDoisInText, foldItems, decide, ageString, SKIP_TYPES,
     asItemArray, asVersionsObject, lookupKey, indexIsUsable, makeIndex,
-    creatorSurnames, authorsCorroborate,
+    creatorSurnames, authorsCorroborate, evictItemKeys,
     titleIsDistinctive,
   };
   if (typeof module !== 'undefined' && module.exports) {
