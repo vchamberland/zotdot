@@ -50,6 +50,10 @@ Zotero's local API has no working DOI search: querying a real DOI, a nonsense st
 
 On an **article page** the dot lands on the article **title** — the anchor that always works, since some publishers only print the DOI in a citation block at the very foot of the article. On a **search-results page** each row gets exactly one dot. DOIs inside reference lists are ignored — badging cited works would answer a question you didn't ask.
 
+## Where it's been validated
+
+[`VALIDATED_SITES.md`](VALIDATED_SITES.md) is the exhaustive, hand-curated list of sites where zotdot has been confirmed to work on a live page. It is not final — the list grows as more publishers and search surfaces are checked, and that file's roadmap tracks the ones already on the shortlist.
+
 ## Menu commands
 
 The userscript-manager menu exposes:
