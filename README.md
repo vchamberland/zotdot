@@ -19,7 +19,7 @@ The script is browser JavaScript communicating with Zotero over loopback, so it 
 
 1. Install a userscript manager — [Violentmonkey](https://violentmonkey.github.io/) or Tampermonkey, in a Chromium browser (Chrome, Edge, Brave) or Firefox.
 2. Enable Zotero's local API: Zotero → **Settings → Advanced → Allow other applications on this computer to communicate with Zotero**. Requires Zotero 7 or newer; tested against Zotero 10.
-3. Install the script — open [`zotdot.user.js`](zotdot.user.js) raw and confirm the install prompt, or drag the file onto the Violentmonkey dashboard.
+3. Install the script — in the Violentmonkey dashboard, click the **+** and choose **New from file**, then select [`zotdot.user.js`](zotdot.user.js).
 4. Open a paper. The first paper page builds the index (a few seconds, once); subsequent pages use the cached index.
 
 The API can be checked directly (same command on macOS, Linux, and Windows 10+):
