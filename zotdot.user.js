@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.1
+// @version      0.8.2
 // @description  Shows a green/red dot next to a paper's DOI depending on whether it is already in your Zotero library
 // @author       Vincent Chamberland
+// @updateURL    http://127.0.0.1:8791/zotdot.user.js
+// @downloadURL  http://127.0.0.1:8791/zotdot.user.js
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -38,7 +40,7 @@
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
   // Must NOT contain "Mozilla/" — see the note in gm.request().
-  const UA = 'zotdot/0.8.1 (local Zotero client)';
+  const UA = 'zotdot/0.8.2 (local Zotero client)';
   // Bumped to 4 when the index gained a creator-surname map, used to corroborate
   // a short title match against the authors printed on the page. An older cache
   // has no creator data, so it is discarded and rebuilt rather than trusted.
