@@ -37,8 +37,11 @@
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = 'zotdot/0.8.6 (local Zotero client)';
   // Cache shape version. Bumped when the stored maps/meta change (v4: creator
-  // surnames; v5: Zotero-Server-ID, so a cache from another database is rebuilt).
-  const CACHE_VERSION = 5;
+  // surnames; v5: Zotero-Server-ID, so a cache from another database is rebuilt;
+  // v6: force a clean rebuild to drop items a pre-fix build left green after they
+  // were trashed — the old /deleted-based prune never evicted them, and a delta
+  // can't repair a cache whose cursor already advanced past the deletion).
+  const CACHE_VERSION = 6;
 
   const K_META = 'zotdot.meta';
   const K_DOI = 'zotdot.doi';
