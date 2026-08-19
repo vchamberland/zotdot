@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.7
+// @version      0.8.8
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,8 +34,14 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
+  const VERSION = '0.8.8';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
-  const UA = 'zotdot/0.8.6 (local Zotero client)';
+  const UA = `zotdot/${VERSION} (local Zotero client)`;
+  // Opt-in console tracing, toggled from the userscript menu, persisted in GM
+  // storage. Off by default — one `[zotdot] vX loaded` line is always emitted so
+  // the running version is visible without enabling anything.
+  let DEBUG = false;
+  const dlog = (...a) => { if (DEBUG) console.info('[zotdot]', ...a); };
   // Cache shape version. Bumped when the stored maps/meta change (v4: creator
   // surnames; v5: Zotero-Server-ID, so a cache from another database is rebuilt;
   // v6: force a clean rebuild to drop items a pre-fix build left green after they
@@ -303,8 +309,11 @@
       return buildIndex(); // schema moved under us; the cache shape is no longer trustworthy
     }
 
+    dlog('refresh: cursor', meta.cursor, '→ server', serverVersion, '| changed', changed.length);
+
     // Library version unchanged → nothing added/edited/deleted (the common case).
     if (serverVersion === meta.cursor && !changed.length) {
+      dlog('refresh: no-op — nothing changed since cursor');
       await gm.set(K_META, { ...meta, checkedAt: Date.now(), serverId: meta.serverId || serverId });
       return null; // caller keeps whatever it already loaded
     }
@@ -339,6 +348,7 @@
     next.doiCount = Object.keys(doiMap).length;
     next.titleCount = Object.keys(titleMap).length;
     next.creatorCount = Object.keys(creatorMap).length;
+    dlog('refresh: prune', pruneResult, '| DOIs', meta.doiCount, '→', next.doiCount, '| nextCursor', nextCursor);
     await gm.set(K_DOI, doiMap);
     await gm.set(K_TITLE, titleMap);
     await gm.set(K_CREATORS, creatorMap);
@@ -365,6 +375,7 @@
     } catch (e) {
       return 'failed'; // unparseable body — treat the window as unread
     }
+    dlog('prune: /items/trash?since=' + since, '→', gone.size, 'trashed keys in window');
     evictItemKeys(gone, doiMap, titleMap, creatorMap);
     return 'pruned';
   }
@@ -846,6 +857,9 @@
     // but give SPAs a few seconds to render their markers first.
     if (!(await ensureLooksLikeAPaper())) return;
 
+    DEBUG = await gm.get('zotdot.debug', false);
+    console.info(`[zotdot] v${VERSION} loaded${DEBUG ? ' (debug on)' : ''}`);
+
     injectCss();
 
     let { meta, index } = await loadIndex();
@@ -942,8 +956,13 @@
         GM_registerMenuCommand('zotdot: show index status', async () => {
           const m = await gm.get(K_META, null);
           alert(m
-            ? `zotdot\nDOIs: ${m.doiCount}\nTitles: ${m.titleCount}\nCursor: ${m.cursor}\nBuilt: ${ageString(m.builtAt)}\nChecked: ${ageString(m.checkedAt)}`
-            : 'zotdot: no index built yet');
+            ? `zotdot v${VERSION}\nDOIs: ${m.doiCount}\nTitles: ${m.titleCount}\nCursor: ${m.cursor}\nCache: v${m.cacheVersion}\nBuilt: ${ageString(m.builtAt)}\nChecked: ${ageString(m.checkedAt)}`
+            : `zotdot v${VERSION}: no index built yet`);
+        });
+        GM_registerMenuCommand('zotdot: toggle debug logging', async () => {
+          DEBUG = !(await gm.get('zotdot.debug', false));
+          await gm.set('zotdot.debug', DEBUG);
+          alert(`zotdot debug logging: ${DEBUG ? 'ON' : 'OFF'}\nReload the page to see [zotdot] lines in the console (F12).`);
         });
       }
     } catch (e) { /* menu commands are a convenience, not a requirement */ }
