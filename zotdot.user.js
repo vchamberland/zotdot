@@ -323,13 +323,14 @@
       foldItems(asItemArray(JSON.parse(b)), doiMap, titleMap, creatorMap);
     }
 
-    // A trashed item just vanishes from since=, so `changed` can be empty while the
-    // version moved. Prune whenever the version moved, always against the PRE-refresh
-    // cursor — once it advances past a deletion, /deleted?since= can't report it again.
+    // A trashed item just vanishes from /items/top?since=, so `changed` can be empty
+    // while the version moved. Prune whenever the version moved, always against the
+    // PRE-refresh cursor — once it advances past a trashing, the trash window that
+    // named that key may have scrolled out of a since= range that starts later.
     const pruneResult = await pruneDeleted(meta.cursor, doiMap, titleMap, creatorMap);
 
-    // Hold the cursor back when the deletion window couldn't be read, so the next
-    // refresh retries it. No /deleted endpoint is different: advance, surface on rebuild.
+    // Hold the cursor back when the trash window couldn't be read, so the next refresh
+    // retries it. A Zotero with no trash endpoint at all: advance, surface on rebuild.
     const nextCursor = pruneResult === 'failed' ? meta.cursor : serverVersion;
     const next = { ...meta, checkedAt: Date.now(), cursor: nextCursor, serverId: meta.serverId || serverId };
     next.doiCount = Object.keys(doiMap).length;
@@ -342,25 +343,26 @@
     return { meta: next, doiMap, titleMap, creatorMap };
   }
 
-  // Deletions aren't in since=; Zotero exposes them at /deleted. Returns 'pruned'
-  // (window read), 'unsupported' (no endpoint), or 'failed' (request broke) so the
-  // caller can decide whether the cursor may advance past this window.
+  // Deletions aren't in /items/top?since= — a trashed item just vanishes from it.
+  // Zotero's LOCAL API has no /deleted endpoint (it 404s), so read the trash directly:
+  // /items/trash?since=<cursor>&format=versions lists every item trashed since the
+  // cursor as a {key: version} object. Evict those keys. Returns 'pruned' (window
+  // read), 'unsupported' (no trash endpoint at all), or 'failed' (request broke) so
+  // the caller can decide whether the cursor may advance past this window.
   async function pruneDeleted(since, doiMap, titleMap, creatorMap) {
     let body;
     try {
-      ({ body } = await zoteroGet(`/deleted?since=${since}`));
+      ({ body } = await zoteroGet(`/items/trash?since=${since}&format=versions`));
     } catch (e) {
       return /zotero (404|501)/.test(e.message) ? 'unsupported' : 'failed';
     }
     let gone;
     try {
-      gone = new Set((JSON.parse(body || '{}').items) || []);
+      gone = new Set(Object.keys(asVersionsObject(JSON.parse(body || '{}'))));
     } catch (e) {
       return 'failed'; // unparseable body — treat the window as unread
     }
-    for (const [k, v] of Object.entries(doiMap)) if (gone.has(v)) delete doiMap[k];
-    for (const [k, v] of Object.entries(titleMap)) if (gone.has(v)) delete titleMap[k];
-    if (creatorMap) for (const k of Object.keys(creatorMap)) if (gone.has(k)) delete creatorMap[k];
+    evictItemKeys(gone, doiMap, titleMap, creatorMap);
     return 'pruned';
   }
 
