@@ -956,6 +956,9 @@
     asItemArray, asVersionsObject, lookupKey, indexIsUsable, makeIndex,
     creatorSurnames, authorsCorroborate, evictItemKeys,
     titleIsDistinctive,
+    // Network/storage-backed internals, exported so a node harness can drive the
+    // full sync flow against a live Zotero (they no-op safely without GM_* shims).
+    buildIndex, refreshIndex, pruneDeleted, loadIndex, gm,
   };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = testable;
