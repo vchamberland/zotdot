@@ -19,16 +19,10 @@
 // ==/UserScript==
 
 /*
- * zotdot — "do I already have this paper?"
- *
- * Zotero 9's local API silently ignores the `q=` search parameter: querying a real
- * DOI, a nonsense string, or nothing at all returns the identical page of items.
- * Better BibTeX's JSON-RPC `item.search` returns [] for DOIs that provably exist.
- * There is no working search oracle to ask.
- *
- * So we don't ask. We mirror. The library is a versioned set exposed as an append
- * stream (`Last-Modified-Version` as cursor, `since=` for the delta), which makes
- * membership an O(1) local set lookup with zero network cost on the hot path.
+ * zotdot — badges whether a paper is already in your local Zotero library.
+ * The local API has no working search, so instead of searching it mirrors the
+ * library into local maps (/items/top paged once, kept current via since= deltas)
+ * and does an O(1) lookup. Read-only, loopback only.
  */
 
 (function () {
@@ -42,10 +36,8 @@
   const REFRESH_INTERVAL_MS = 120000;
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = 'zotdot/0.8.6 (local Zotero client)';
-  // Bumped to 4 when the index gained a creator-surname map; bumped to 5 when the
-  // cache began recording the Zotero-Server-ID (see refreshIndex) so a cache built
-  // against a different local database is discarded rather than served for the
-  // wrong library. An older cache lacks these fields and is rebuilt, not trusted.
+  // Cache shape version. Bumped when the stored maps/meta change (v4: creator
+  // surnames; v5: Zotero-Server-ID, so a cache from another database is rebuilt).
   const CACHE_VERSION = 5;
 
   const K_META = 'zotdot.meta';
@@ -62,8 +54,8 @@
 
   // ────────────────────────────────────────────────────────── pure: normalizing
 
-  // DOIs are case-insensitive by spec but stored inconsistently. Normalize both
-  // sides of the comparison to the same shape or nothing will ever match.
+  // DOIs are case-insensitive but stored inconsistently; normalize both sides of
+  // the comparison to the same shape or nothing matches.
   function normalizeDoi(raw) {
     if (!raw) return '';
     let s = String(raw).trim().toLowerCase();
@@ -71,16 +63,14 @@
     s = s.replace(/^https?:\/\/doi\.org\//, '');
     s = s.replace(/^info:doi\//, '');
     s = s.replace(/^doi:\s*/, '');
-    // Strip enclosing punctuation on both sides — DOIs are routinely printed
-    // parenthesised or sentence-final.
+    // DOIs are routinely printed parenthesised or sentence-final; strip enclosers.
     s = s.replace(/^[\s([{<"'‹«]+/, '');
     s = s.replace(/[\s.,;:)\]}>"'›»]+$/, '');
     return /^10\.\d{4,9}\/\S+$/.test(s) ? s : '';
   }
 
-  // Result listings decorate titles with a format tag — Google Scholar emits
-  // "[HTML] Closed-loop brain stimulation", "[PDF] ...", "[BOOK] ..." — and those
-  // letters would otherwise become part of the key and never match the library.
+  // Result listings prefix titles with a format tag (Scholar: "[HTML] …", "[PDF] …",
+  // "[BOOK] …"); strip it or the tag becomes part of the key and never matches.
   const LISTING_PREFIX = /^\s*\[(html|pdf|book|citation|b|c|h)\]\s*/i;
 
   function normalizeTitle(raw) {
@@ -109,10 +99,8 @@
 
   // ───────────────────────────────────────────── environment shims (GM_* / GM.*)
 
-  // Violentmonkey/Tampermonkey pass a response-ish object to onerror. Its fields
-  // vary by manager and version, so pull anything present rather than assuming a
-  // shape, and append the standing hint: on Chromium 151+ a loopback request can
-  // be refused because the page's origin has no Local Network Access grant.
+  // Build a useful error string from whatever fields the userscript manager hands
+  // back (they vary by manager/version), with a hint about the loopback refusal.
   function describeNetworkError(r) {
     const bits = [];
     if (r && typeof r === 'object') {
@@ -146,20 +134,14 @@
         fn({
           method: 'GET',
           timeout: 20000,
-          // Zotero's local API is deliberately non-browser-only: it drops the
-          // connection outright for any request carrying an `Origin` header, and
-          // for any request whose User-Agent contains "Mozilla/". Measured against
-          // Zotero 9.0.6 — `curl` with no Origin and a plain UA gets 200, the same
-          // request with `-A "Mozilla/5.0"` gets an empty reply. This is an
-          // anti-DNS-rebinding defence, not a bug, so the client must simply not
-          // look like a browser. Violentmonkey can rewrite these restricted
-          // headers because it holds webRequest/declarativeNetRequest permissions.
+          // Zotero's local API drops any request with an `Origin` header or a
+          // "Mozilla/" User-Agent (anti-DNS-rebinding), so the client must not look
+          // like a browser. Violentmonkey can set these restricted headers.
           anonymous: true,
           ...opts,
           headers: { 'User-Agent': UA, ...(opts.headers || {}) },
           onload: (r) => resolve(r),
-          // A bare "network" says nothing about WHY. Surface whatever fields the
-          // userscript manager hands back so the next failure names itself.
+          // Surface the manager's error fields so the next failure names itself.
           onerror: (r) => reject(new Error(describeNetworkError(r))),
           ontimeout: () => reject(new Error('timeout — Zotero did not answer within 20s')),
         });
@@ -182,10 +164,8 @@
     return { headers, body: res.responseText };
   }
 
-  // A 200 carrying an unexpected body must never be allowed to become the index.
-  // Zotero answering with an error page, an empty string, or a bare object where
-  // an array belongs would otherwise fold into a near-empty mirror and paint red
-  // on the whole library. Throwing routes it to main's catch, which stays grey.
+  // A 200 with an unexpected body must not become the index: a non-array would fold
+  // into a near-empty mirror and paint red on the whole library. Throw → main stays grey.
   function asItemArray(parsed) {
     if (!Array.isArray(parsed)) throw new Error('zotero: expected an item array');
     return parsed;
@@ -200,9 +180,8 @@
 
   const SKIP_TYPES = new Set(['attachment', 'note', 'annotation']);
 
-  // Surnames, lowercased and stripped, for corroborating a title match against the
-  // author line a result page prints. Zotero creators are either {lastName} or a
-  // single {name} field for institutional authors.
+  // Lowercased surnames for corroborating a title match against a result page's
+  // author line. Zotero creators are {lastName} or a single {name} (institutions).
   function creatorSurnames(creators) {
     if (!Array.isArray(creators)) return '';
     const out = [];
@@ -218,9 +197,8 @@
     return out.join(' ');
   }
 
-  // True when any indexed surname appears as a whole word in the page's author
-  // line. Scholar prints "C Lord, TS Brugha, G Dumas, ..." — initials collapse to
-  // 1-2 char tokens, so only real surnames can match.
+  // True when an indexed surname appears as a whole word in the page's author line.
+  // Initials collapse to 1-2 char tokens, so only real surnames match.
   function authorsCorroborate(surnames, pageAuthorText) {
     if (!surnames || !pageAuthorText) return false;
     const tokens = new Set(normalizeTitle(pageAuthorText).split(' ').filter(Boolean));
@@ -237,22 +215,16 @@
         const sn = creatorSurnames(d.creators);
         if (sn) creatorMap[d.key] = sn;
       }
-      // EVERY item's title is indexed, including items that have a DOI. Google
-      // Scholar result rows carry no DOI anywhere, so the title is the only
-      // signal available there — restricting the title map to DOI-less items (as
-      // v0.1 did) made every Scholar row for a paper you own render red.
+      // Index EVERY item's title, even DOI-bearing ones: Google Scholar rows carry
+      // no DOI, so the title is the only signal available there.
       const t = normalizeTitle(d.title);
       if (t && !titleMap[t]) titleMap[t] = d.key;
     }
   }
 
-  // Remove every DOI, title and creator entry that points at one of `keys`.
-  // foldItems only ADDS, so an item whose DOI or title was corrected in Zotero
-  // would otherwise keep its superseded value in the maps forever — a permanent
-  // false green on any page still showing the old DOI/title. The delta refresh
-  // evicts an edited item's stale entries before folding its fresh copy back in;
-  // pruneDeleted uses the same shape for items that vanished entirely. Mutates the
-  // maps in place. Pure over its inputs — no network, no GM storage.
+  // Remove every DOI/title/creator entry pointing at one of `keys`. foldItems only
+  // adds, so an item whose DOI/title was edited would keep its old value forever (a
+  // false green); the delta evicts before re-folding. Mutates in place, pure.
   function evictItemKeys(keys, doiMap, titleMap, creatorMap) {
     const set = keys instanceof Set ? keys : new Set(keys);
     if (doiMap) for (const [k, v] of Object.entries(doiMap)) if (set.has(v)) delete doiMap[k];
@@ -269,9 +241,8 @@
     let schema = '';
     let serverId = '';
     let pages = 0;
-    // Only a short final page proves we reached the end of the library. Running
-    // out of MAX_PAGES instead means the mirror is a prefix of the library, and a
-    // prefix cannot answer "absent" — see indexIsUsable.
+    // Only a short final page proves we reached the library's end; hitting MAX_PAGES
+    // means the mirror is a prefix, which cannot answer "absent" (see indexIsUsable).
     let complete = false;
 
     for (let start = 0; pages < MAX_PAGES; start += PAGE_SIZE) {
@@ -317,11 +288,9 @@
     const serverVersion = parseInt(headers['last-modified-version'] || '0', 10) || meta.cursor;
     const changed = Object.keys(asVersionsObject(JSON.parse(body || '{}')));
 
-    // A different local database (a switched account, or a restored backup) can
-    // reuse the same version numbers, so `since=` would fold another library's
-    // deltas into this cache. Zotero 10 tags each database with a stable
-    // Zotero-Server-ID; when it changes, the cache belongs to a different library
-    // and must be rebuilt from scratch rather than extended.
+    // A different database (switched account / restored backup) can reuse the same
+    // version numbers, so since= would fold the wrong library's deltas in. Zotero 10
+    // tags each database with a stable Zotero-Server-ID; if it changed, rebuild.
     const serverId = headers['zotero-server-id'] || '';
     if (serverId && meta.serverId && serverId !== meta.serverId) {
       return buildIndex();
@@ -331,8 +300,7 @@
       return buildIndex(); // schema moved under us; the cache shape is no longer trustworthy
     }
 
-    // The library version did not move, so nothing was added, edited, or deleted.
-    // This is the common case and it costs no further requests.
+    // Library version unchanged → nothing added/edited/deleted (the common case).
     if (serverVersion === meta.cursor && !changed.length) {
       await gm.set(K_META, { ...meta, checkedAt: Date.now(), serverId: meta.serverId || serverId });
       return null; // caller keeps whatever it already loaded
@@ -341,16 +309,12 @@
     const doiMap = await gm.get(K_DOI, null);
     const titleMap = (await gm.get(K_TITLE, null)) || Object.create(null);
     const creatorMap = (await gm.get(K_CREATORS, null)) || Object.create(null);
-    // The delta folds changed items into the EXISTING maps. If the DOI map is
-    // missing or empty, folding into a fresh object would persist a handful of
-    // items as though they were the whole library — mass false red. Rebuild.
+    // Fold the delta into the EXISTING maps. An empty/missing DOI map would persist
+    // a handful of items as the whole library (mass false red) — rebuild instead.
     if (!doiMap || !Object.keys(doiMap).length) return buildIndex();
 
-    // Evict each edited item's OLD DOI/title before folding its fresh copy back
-    // in — foldItems only adds, so a corrected DOI/title in Zotero would leave the
-    // superseded value pointing at the item forever (a false green). New items
-    // have no prior entry, so this is a no-op for them; pruneDeleted (below)
-    // handles items that vanished entirely.
+    // Evict each edited item's stale DOI/title before re-folding its fresh copy;
+    // new items have no prior entry (no-op). pruneDeleted (below) handles vanished items.
     evictItemKeys(changed, doiMap, titleMap, creatorMap);
 
     for (let i = 0; i < changed.length; i += 50) {
@@ -359,18 +323,13 @@
       foldItems(asItemArray(JSON.parse(b)), doiMap, titleMap, creatorMap);
     }
 
-    // A trashed item vanishes from `/items/top?since=`, so `changed` can be empty
-    // while the library version moved — a deletion is exactly that shape. Pruning
-    // must therefore run whenever the version moved at all, not only when items
-    // came back, and always against the PRE-refresh cursor: once the cursor
-    // advances past a deletion, `/deleted?since=` can never report it again and
-    // the stale entry is a permanent false green.
+    // A trashed item just vanishes from since=, so `changed` can be empty while the
+    // version moved. Prune whenever the version moved, always against the PRE-refresh
+    // cursor — once it advances past a deletion, /deleted?since= can't report it again.
     const pruneResult = await pruneDeleted(meta.cursor, doiMap, titleMap, creatorMap);
 
-    // Hold the cursor back when the deletion window could not be read, so the
-    // next refresh retries the same window instead of skipping past it forever.
-    // A Zotero with no /deleted endpoint is a different case: retrying gains
-    // nothing there, so the cursor advances and deletions surface on rebuild.
+    // Hold the cursor back when the deletion window couldn't be read, so the next
+    // refresh retries it. No /deleted endpoint is different: advance, surface on rebuild.
     const nextCursor = pruneResult === 'failed' ? meta.cursor : serverVersion;
     const next = { ...meta, checkedAt: Date.now(), cursor: nextCursor, serverId: meta.serverId || serverId };
     next.doiCount = Object.keys(doiMap).length;
@@ -383,11 +342,9 @@
     return { meta: next, doiMap, titleMap, creatorMap };
   }
 
-  // Deletions do not show up in `since=`; Zotero exposes them separately.
-  // Returns 'pruned' when the window was read, 'unsupported' when this Zotero has
-  // no /deleted endpoint at all, and 'failed' when the request itself broke. The
-  // caller uses that to decide whether the cursor may advance past this window:
-  // advancing past an unread deletion makes it permanently invisible.
+  // Deletions aren't in since=; Zotero exposes them at /deleted. Returns 'pruned'
+  // (window read), 'unsupported' (no endpoint), or 'failed' (request broke) so the
+  // caller can decide whether the cursor may advance past this window.
   async function pruneDeleted(since, doiMap, titleMap, creatorMap) {
     let body;
     try {
@@ -409,10 +366,8 @@
 
   // ────────────────────────────────────────────────────────── page: extraction
 
-  // Order is empirical (surveyed Nature, PLOS, Frontiers, bioRxiv, eNeuro, arXiv):
-  // `citation_doi` is present on every verified site except arXiv. `dc.identifier`
-  // is equally widespread but its value is bare on PLOS/eNeuro/bioRxiv and
-  // `doi:`-prefixed on Nature/Frontiers — normalizeDoi absorbs both.
+  // Empirical order (Nature, PLOS, Frontiers, bioRxiv, eNeuro, arXiv): citation_doi
+  // is on every site but arXiv; dc.identifier is bare or `doi:`-prefixed (both fold).
   const META_DOI_KEYS = [
     'citation_doi',
     'bepress_citation_doi',
@@ -421,10 +376,9 @@
     'prism.doi',
   ];
 
-  // IEEE Xplore is an Angular app whose article DOI never appears as a <meta> tag
-  // or a doi.org link — it lives only inside an inline `xplGlobal.document.metadata`
-  // script object, which IS server-rendered and present from the first paint. Read
-  // it there. Gated to the IEEE host so no other page pays for the script scan.
+  // IEEE Xplore (Angular) never exposes the DOI as a <meta> or doi.org link — only
+  // inside an inline `xplGlobal.document.metadata` script, present from first paint.
+  // Read it there. Host-gated so no other page pays for the script scan.
   function ieeeDoi(root) {
     if (!/(^|\.)ieeexplore\.ieee\.org$/i.test(location.hostname)) return '';
     for (const s of root.querySelectorAll('script:not([src])')) {
@@ -446,8 +400,8 @@
         if (d) return d;
       }
     }
-    // arXiv ships no citation_doi at all — only its own minted DOI, and only as
-    // a link id. Fall back to that, then to constructing it from the arXiv id.
+    // arXiv ships no citation_doi — only its minted DOI, as a link id. Fall back to
+    // that, then to constructing it from the arXiv id.
     const arxivLink = root.querySelector('a#arxiv-doi-link');
     if (arxivLink) {
       const d = normalizeDoi(arxivLink.getAttribute('href')) || normalizeDoi(arxivLink.textContent);
@@ -482,10 +436,8 @@
     return h1 ? h1.textContent.trim() : (document.title || '');
   }
 
-  // A DOI sitting inside a reference list belongs to a cited work, not to the
-  // article being displayed. Badging it would answer a question nobody asked.
-  // The article's own title element. Publisher-specific classes come first,
-  // because a bare `h1` on some sites is the journal name or a site banner.
+  // The article's own title element, publisher classes first — a bare `h1` is the
+  // journal name or a site banner on some sites, so it comes last.
   const ARTICLE_TITLE_SELECTORS = [
     'h1.c-article-title',            // BMC / Springer Nature
     'h1[data-test="article-title"]', // BMC
@@ -508,9 +460,8 @@
     return null;
   }
 
-  // Verified necessary: Nature, eNeuro and bioRxiv article pages all carry many
-  // doi.org links in their reference lists, so an unscoped `a[href*="doi.org"]`
-  // would badge cited works instead of the article being read.
+  // Reference lists carry many doi.org links to CITED works; an unscoped selector
+  // would badge those instead of the article. (Nature, eNeuro, bioRxiv verified.)
   const REFERENCE_ZONES = [
     '.references', '#references', '#ref-list', '.ref-list', 'ol.references',
     '.citation-list', '#bibliography', '.bibliography', 'section[id*="bibl" i]',
@@ -523,13 +474,12 @@
     return !!(node.closest && node.closest(REFERENCE_ZONES));
   }
 
-  // Visible DOI anchors, in preference order, so the dot lands where Vincent's
-  // eye already is rather than somewhere structurally convenient.
+  // Visible DOI anchors in preference order, so the dot lands where the reader is
+  // already looking rather than somewhere structurally convenient.
   function findDoiAnchors(root) {
     const found = [];
     const seen = new Set();
-    // The same DOI printed twice on one page is still one identity, so dedupe by
-    // value — two dots for one DOI is two answers to one question.
+    // Dedupe by value — the same DOI printed twice is still one identity.
     const seenDoi = new Set();
 
     for (const a of root.querySelectorAll('a[href*="doi.org/"], a[href^="doi:"]')) {
@@ -541,10 +491,9 @@
       found.push({ doi, node: a, source: 'link' });
     }
 
-    // Do NOT stop here when links were found. Nature prints the article's own DOI
-    // as plain text while linking dozens of *cited* DOIs, so a page can legitimately
-    // carry both link anchors and a text-only DOI that matters more. Verified by
-    // rendering: early-returning here left the Nature-shaped case unbadged.
+    // Do NOT early-return when links were found: Nature prints the article's own DOI
+    // as plain text while linking dozens of CITED DOIs, so a page can carry both and
+    // the text-only one matters more. (Early-returning left the Nature case unbadged.)
 
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
@@ -568,15 +517,11 @@
 
   // ───────────────────────────────────────────────────────── page: site adapters
 
-  // Multi-result pages are where this is most useful and where a per-page
-  // single-DOI assumption falls apart hardest.
+  // Multi-result pages: one dot per row, where a single-DOI-per-page assumption breaks.
   const ROW_ADAPTERS = [
-    // Scholar profile ("citations") pages list publications in a table, not in
-    // the .gs_r result blocks, so the search adapter finds zero rows there.
-    // NOTE: these two selectors are from prior knowledge, NOT verified against a
-    // live page this session — scholar.google.com served a captcha to every
-    // non-browser fetch. If profile pages stay bare, these are the two strings to
-    // correct, and nothing else needs to change.
+    // Scholar profile ("citations") pages use a table, not .gs_r blocks. NOTE: these
+    // two selectors are from prior knowledge, unverified (Scholar captchas non-browser
+    // fetches). If profile pages stay bare, these are the strings to correct.
     { host: /scholar\.google\./, rows: '#gsc_a_b .gsc_a_tr', title: '.gsc_a_at', authors: '.gs_gray', distinctive: true },
     { host: /scholar\.google\./, rows: '#gs_res_ccl_mid .gs_r.gs_or', title: '.gs_rt', authors: '.gs_a', distinctive: true },
     { host: /pubmed\.ncbi\.nlm\.nih\.gov/, rows: 'article.full-docsum', title: '.docsum-title', authors: '.docsum-authors', distinctive: true },
@@ -586,12 +531,9 @@
     { host: /sciencedirect\.com\/search/, rows: '.ResultItem', title: '.result-list-title-link', authors: '.Authors' },
   ];
 
-  // `distinctive: true` marks a rows-selector specific enough to identify the
-  // platform on its own. Those adapters activate structurally, which is strictly
-  // more robust than hostname matching: it survives regional Scholar domains,
-  // library proxies, and HighWire-family journals we never enumerated. Generic
-  // selectors (`.ResultItem`, `.resultList > li`) stay host-gated, because
-  // structural activation on them would false-positive on unrelated sites.
+  // `distinctive: true` = a rows-selector specific enough to identify the platform on
+  // its own, so the adapter activates structurally (survives regional domains, proxies,
+  // HighWire journals). Generic selectors stay host-gated to avoid false hits.
   function rowsPresent(a) {
     try { return !!document.querySelector(a.rows); } catch (e) { return false; }
   }
@@ -599,24 +541,19 @@
   function activeAdapter() {
     const here = location.hostname + location.pathname;
     const onThisHost = ROW_ADAPTERS.filter((a) => a.host.test(here));
-    // One host can serve several layouts — Scholar has both a search-results page
-    // and a profile page. Matching the hostname is not enough; take the adapter
-    // whose rows actually exist in this document.
+    // One host can serve several layouts (Scholar: search + profile); pick the
+    // adapter whose rows actually exist here.
     for (const a of onThisHost) if (rowsPresent(a)) return a;
     for (const a of ROW_ADAPTERS) if (a.distinctive && rowsPresent(a)) return a;
-    // A known listing host with no rows yet (still loading, or an empty search) is
-    // still NOT an article page — return the host adapter so the single-paper
-    // branch does not start badging navigation headings.
+    // A known host with no rows yet (loading/empty) is still not an article page —
+    // return the host adapter so the single-paper branch doesn't badge nav headings.
     return onThisHost[0] || null;
   }
 
   // ──────────────────────────────────────────────────────────── page: rendering
 
-  // Glossy indicator-lamp styling: a specular highlight up and left, a shading
-  // wash down and right, and a coloured halo. Two things keep it usable rather
-  // than merely decorative — the halo is sized in em so it scales with the host
-  // page's type, and `unknown` is deliberately an UNLIT lamp (dim, no halo), so
-  // "I could not check" never looks like a confident answer.
+  // Indicator-lamp styling. The halo is sized in em so it scales with page type; the
+  // `unknown` state is an unlit lamp (dim, no halo) so "couldn't check" never looks confident.
   const CSS = `
   .zotdot {
     display: inline-block; width: .72em; height: .72em;
@@ -688,22 +625,14 @@
     }
   }
 
-  // Idempotency is keyed on (anchor node, DOI), not on the node alone. A single
-  // element can legitimately carry several distinct DOIs — a text anchor is the
-  // shared parentElement of its text nodes — and a node-only guard would repaint
-  // the first DOI's dot with the second DOI's verdict.
+  // Idempotency keyed on (node, DOI), not node alone: one element can carry several
+  // DOIs (a text anchor is the shared parent), and a node-only guard would collide.
   const painted = new WeakMap(); // node -> Map<doiKey, dotElement>
 
-  // `idKey` MUST come from stable page data (the anchor's DOI, or the row's
-  // normalized title) and never from the verdict — the verdict's DOI is empty on
-  // the pre-index grey pass and populated afterwards, which would key the same
-  // anchor twice and stack two dots on it.
-  // `inside: true` appends the dot as the last child of `node` instead of
-  // inserting it after `node`. Required whenever the anchor is an element whose
-  // last child we would otherwise target: passing `el.lastChild` is a moving
-  // target, because after the first insertion the last child IS the dot, so the
-  // next scan keys on a different node and appends a second one. Anchor on the
-  // stable element and grow inside it.
+  // `idKey` must come from stable page data (anchor DOI, or row title), never the
+  // verdict — the verdict's DOI is empty pre-index and set after, which would key the
+  // same anchor twice and stack two dots. `inside: true` appends the dot as the last
+  // child instead of after `node`, so a moving lastChild can't spawn a second dot.
   function placeDot(node, state, info, idKey, inside) {
     if (!node) return null;
     if (!inside && !node.parentNode) return null;
@@ -739,18 +668,15 @@
 
   // ────────────────────────────────────────────────────────────── decide + paint
 
-  // The maps are created with Object.create(null), but they round-trip through GM
-  // storage as JSON and come back with Object.prototype attached. normalizeTitle
-  // emits [a-z0-9 ] only, so a paper titled "Constructor" normalizes to exactly
-  // `constructor` — a bare `map[key]` would hit the prototype and report a match
-  // whose "key" is a function. Own-property only.
+  // Maps are Object.create(null) but round-trip through JSON storage with
+  // Object.prototype attached; a title like "Constructor" normalizes to `constructor`,
+  // so use hasOwnProperty, not a bare map[key] that would hit the prototype.
   function lookupKey(map, key) {
     if (!map || !key) return '';
     return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : '';
   }
 
-  // Guards the title-match-as-green rule above. A title has to be long enough and
-  // wordy enough that two unrelated papers are unlikely to share it exactly.
+  // A title must be long and wordy enough that two unrelated papers won't share it.
   const TITLE_GREEN_MIN_CHARS = 25;
   const TITLE_GREEN_MIN_WORDS = 4;
 
@@ -761,23 +687,17 @@
 
   function decide(doi, title, index, pageAuthors) {
     if (!index) return { state: STATE.UNKNOWN, reason: 'index not built yet' };
-    // An index that cannot answer "absent" must never say "absent". A truncated or
-    // empty mirror still answers "present" correctly, so hits are kept.
+    // A mirror that can't answer "absent" must never say "absent"; hits still hold.
     const doiKey = lookupKey(index.doiMap, doi);
     if (doi && doiKey) return { state: STATE.HIT, key: doiKey, doi };
     const t = normalizeTitle(title);
     const titleKey = lookupKey(index.titleMap, t);
     if (t && titleKey) {
-      // An exact match on a long, distinctive title is strong evidence — strong
-      // enough for green. Google Scholar carries no DOI anywhere, so holding every
-      // Scholar row at amber made amber the only colour that page could ever show,
-      // which is no signal at all. Short or generic titles ("Editorial",
-      // "Introduction", "Corrigendum") collide across papers and stay amber.
+      // An exact match on a long distinctive title is green; Scholar has no DOI, so
+      // holding every row at amber would be no signal. Short/generic titles stay amber.
       if (titleIsDistinctive(t)) return { state: STATE.HIT, key: titleKey, doi, via: 'title' };
-      // A short title alone collides, but a short title PLUS an author printed on
-      // the page is a different claim entirely. "Autism spectrum disorder" is
-      // shared by many works; "Autism spectrum disorder" by an author list
-      // containing Lord and Dumas is the one in the library.
+      // A short title alone collides, but a short title + an author printed on the
+      // page is a different claim — promote to green.
       if (authorsCorroborate(lookupKey(index.creatorMap, titleKey), pageAuthors)) {
         return { state: STATE.HIT, key: titleKey, doi, via: 'title+author' };
       }
@@ -787,8 +707,7 @@
       return { state: STATE.UNKNOWN, reason: index.unusableReason || 'index incomplete', doi };
     }
     if (!doi && !t) return { state: STATE.UNKNOWN, reason: 'no DOI or title on page' };
-    // Red is only reachable from a complete index we actually have. Every other
-    // path is grey.
+    // Red is only reachable from a complete index we hold; every other path is grey.
     return { state: STATE.MISS, doi };
   }
 
@@ -796,9 +715,8 @@
     const info0 = { builtAt: meta.builtAt, checkedAt: meta.checkedAt };
     const pageDoi = metaDoi(document) || '';
 
-    // An article page that happens to embed a results-shaped list ("related
-    // articles") is still an article page. Its own citation_doi outranks any
-    // structural row match, so the dot lands on the paper actually being read.
+    // An article page embedding a results-shaped list ("related articles") is still an
+    // article page: its own citation_doi outranks any row match, so the dot lands on it.
     const adapter = pageDoi ? null : activeAdapter();
     const rows = adapter ? Array.from(document.querySelectorAll(adapter.rows)) : [];
 
@@ -806,14 +724,12 @@
       for (const row of rows) {
         const titleBlock = row.querySelector(adapter.title) || row.querySelector('a');
         if (!titleBlock) continue;
-        // Anchor to the inner link, not the block-level heading — inserting after
-        // an <h3> puts the dot on its own line instead of beside the title.
+        // Anchor to the inner link, not the <h3>, or the dot drops to its own line.
         const titleEl = titleBlock.querySelector('a') || titleBlock;
         const anchors = findDoiAnchors(row);
         const doi = anchors.length ? anchors[0].doi : '';
         const titleText = titleEl.textContent || '';
-        // The author line printed under the row corroborates a short title match
-        // that would otherwise be too generic to call green.
+        // The row's author line corroborates a short title match.
         const authorEl = adapter.authors ? row.querySelector(adapter.authors) : null;
         const authorText = authorEl ? authorEl.textContent || '' : '';
         const verdict = decide(doi, titleText, index, authorText);
@@ -828,11 +744,9 @@
     const title = metaTitle(document);
     const anchors = findDoiAnchors(document.body || document);
 
-    // Badge the article title whenever the page has a paper identity — not merely
-    // as a fallback when no DOI is visible. On BMC/Springer the only visible DOI
-    // sits in a citation block at the very bottom of the article, where a dot
-    // answers the question long after you have scrolled past asking it. The title
-    // is always at the top, so that is where the answer belongs.
+    // Badge the article title whenever the page has a paper identity, not only as a
+    // DOI fallback: some publishers print the DOI only in a footer citation block,
+    // long after you've scrolled past. The title is always at the top.
     const hasIdentity = !!pageDoi || !!document.querySelector('meta[name="citation_title" i]');
     let painted = 0;
     if (hasIdentity) {
@@ -846,19 +760,14 @@
     }
 
 
-    // Only badge a visible DOI when the title could NOT carry the answer — a page
-    // with both would otherwise show the same verdict twice, a few centimetres
-    // apart. The DOI is still read and still preferred for MATCHING; this governs
-    // placement only. Pages with a bare DOI and no article metadata (a lab's
-    // publication page, a PDF landing page) still get their dot here.
+    // Only badge a visible DOI when the title couldn't carry the answer, else the same
+    // verdict shows twice. The DOI is still read and preferred for MATCHING; this is
+    // placement only. A bare DOI with no article metadata still gets its dot here.
     if (!painted && anchors.length) {
       for (const a of anchors) {
-        // Every anchor is judged on its OWN DOI. The page title is only offered
-        // as a fallback identity to the anchor that actually IS this page's
-        // paper: the one matching the meta DOI, or — when the page states no meta
-        // DOI and shows exactly one — that single anchor. Lending the page title
-        // to an unrelated DOI (a lab page listing five papers) would paint amber
-        // on four papers the title does not describe.
+        // Each anchor is judged on its OWN DOI. The page title is lent only to the
+        // anchor that IS this page's paper (matches the meta DOI, or the sole anchor
+        // when there's no meta DOI) — lending it to a lab page's other papers is wrong.
         const ownsPageTitle = pageDoi ? a.doi === pageDoi : anchors.length === 1;
         const v = decide(a.doi, ownsPageTitle ? title : '', index);
         placeDot(a.node, v.state, { ...info0, ...v }, a.doi);
@@ -875,20 +784,15 @@
     if (metaDoi(document)) return true;
     if (activeAdapter()) return true;
     if (document.querySelector('a[href*="doi.org/"]')) return true;
-    // A citation_title alone marks a paper page even when it carries no DOI (HAL
-    // posters, some SPAs) — scan()'s title path can still answer for it.
+    // A citation_title alone marks a paper page even without a DOI (HAL posters, SPAs).
     if (document.querySelector('meta[name="citation_title" i]')) return true;
     return false;
   }
 
-  // Single-page academic sites (IEEE Xplore, HAL, many publisher apps) render the
-  // paper markers — citation meta, the title, the DOI link — client-side, AFTER
-  // document-idle. A one-shot check bails before they exist and never comes back,
-  // which is why those sites showed no dot at all. So when the page is not yet a
-  // paper, poll a few times on a short schedule before giving up. This is NOT a
-  // persistent observer: the @match is *://*/*, so this runs on every page, and a
-  // plain non-paper page must stop quickly rather than watch forever. A handful of
-  // cheap checks costs nothing there and still catches a slow SPA.
+  // SPAs (IEEE Xplore, HAL, many publisher apps) render paper markers after
+  // document-idle; a one-shot check bails before they exist and never retries. Poll
+  // briefly before giving up. NOT a persistent observer — @match is *://*/*, so a
+  // plain non-paper page must stop quickly; a few cheap checks catch a slow SPA.
   function ensureLooksLikeAPaper() {
     if (pageLooksLikeAPaper()) return Promise.resolve(true);
     return new Promise((resolve) => {
@@ -901,10 +805,9 @@
     });
   }
 
-  // A mirror may only answer "not in your library" when it is known to cover the
-  // whole library. A build that ran out of MAX_PAGES covers a prefix; a build that
-  // came back empty (wrong library id, Zotero mid-startup) covers nothing. Both
-  // would otherwise paint confident red on papers Vincent owns.
+  // A mirror may only say "not in your library" when it covers the whole library. A
+  // build that hit MAX_PAGES covers a prefix; an empty build covers nothing. Either
+  // would paint confident red on papers you own.
   function indexIsUsable(meta) {
     return !!meta && meta.complete === true && (meta.doiCount + meta.titleCount) > 0;
   }
@@ -934,9 +837,8 @@
   }
 
   async function main() {
-    // The @match is *://*/* so this runs everywhere. Bail before touching storage
-    // or the network on the overwhelming majority of pages that are not papers —
-    // but give SPAs a few seconds to render their paper markers before giving up.
+    // @match is *://*/*, so bail on non-paper pages before touching storage/network —
+    // but give SPAs a few seconds to render their markers first.
     if (!(await ensureLooksLikeAPaper())) return;
 
     injectCss();
@@ -944,20 +846,13 @@
     let { meta, index } = await loadIndex();
     if (!meta) meta = { builtAt: 0, checkedAt: 0 }; // never let a scan hit a null meta
 
-    // Paint immediately with whatever we have — grey if that is nothing — so the
-    // dot never waits on the network.
+    // Paint immediately with whatever we have (grey if nothing) — never wait on network.
     scan(index, meta);
 
-    // Install the observer BEFORE the (multi-second) build below, not after it.
-    // Journal pages hydrate and re-render while the index builds; with no observer
-    // watching yet, the page can remove the freshly-painted grey dot and nothing
-    // re-adds it until the build finishes — the dot visibly blinks out and comes
-    // back green. With the observer live from the start, every re-render re-paints:
-    // grey while `index` is still null, the real verdict once the build resolves it
-    // (rescan reads the `index`/`meta` closures, which the build reassigns below).
-    // Inserting a dot is itself a childList mutation, so each scan is wrapped in a
-    // disconnect/reconnect + `scanning` guard to stop the observer re-entering on
-    // its own output; the live poller below shares that discipline through rescan.
+    // Install the observer BEFORE the multi-second build: journal pages re-render
+    // while it runs and would drop the grey dot with nothing to re-add it (it blinks
+    // out, then returns green). rescan reads the index/meta closures the build
+    // reassigns; the disconnect + `scanning` guard stops re-entry on our own inserts.
     const target = document.body || document.documentElement;
     const observeOpts = { childList: true, subtree: true };
     let scanning = false;
@@ -993,28 +888,19 @@
         }
       }
     } catch (e) {
-      // Zotero closed, port refused, timeout. Leave the grey dots grey — a red
-      // dot here would assert "not in your library" when we simply cannot know.
-      // The observer is already installed, so grey dots survive page re-renders.
+      // Zotero closed/refused/timed out: leave grey dots grey (red would assert
+      // "not in your library" when we can't know). The observer stays installed.
       console.info('[zotdot] Zotero unreachable:', e.message);
       return;
     }
 
-    // Repaint with the resolved verdict through rescan(), so the observer does not
-    // re-fire on this scan's own inserted dots.
+    // Repaint the resolved verdict via rescan() so the observer doesn't re-fire on it.
     rescan();
 
-    // ── Live refresh: keep the dots current without waiting on a page reload.
-    // The userscript cannot be *pushed* to when an item is saved to Zotero —
-    // Zotero is a separate process with no channel into the page — so the closest
-    // achievable "check when an item is added" is a cheap poll of the same since=
-    // check main() runs on load: one request that returns {} when nothing changed
-    // (the common case, at zero further cost). Two triggers, both gated on the tab
-    // being visible so only the paper Vincent is actually looking at ever polls:
-    //   • the tab regaining focus — exactly the shape of "saved to Zotero, then
-    //     switched back to the page"; the dot updates the instant he returns.
-    //   • a short interval — the backstop for a Connector save that never blurs
-    //     the tab, so an item added while the page stays open still lands.
+    // Live refresh: keep dots current without a reload. A userscript can't be pushed
+    // to by Zotero, so poll the cheap since= check — on tab focus (the "saved, then
+    // switched back" case) and on a short interval as a backstop — both gated on the
+    // tab being visible so only the page you're looking at ever polls.
     const LIVE_POLL_MS = 15000;
     let refreshing = false;
     async function liveRefresh() {
@@ -1030,8 +916,7 @@
           meta = { ...meta, checkedAt: Date.now() };
         }
       } catch (e) {
-        // Zotero went away mid-session — keep the last good dots and retry next
-        // tick, exactly as main() leaves grey dots grey on an unreachable Zotero.
+        // Zotero went away mid-session: keep the last good dots, retry next tick.
       } finally {
         refreshing = false;
       }
