@@ -1,56 +1,48 @@
 # zotdot
 
-A userscript that places a coloured dot next to a paper's title indicating whether it is present in the local Zotero library. It runs on article pages and on search-results listings (PubMed, Google Scholar, bioRxiv, and others).
+A userscript that shows at a glance whether papers you browse are already in your local Zotero library.
+
+It works on article pages and search-result listings across sites such as PubMed, Google Scholar, bioRxiv, and other publishers and scholarly databases.
 
 ## The four states
 
 | Dot | Meaning |
 |---|---|
-| 🟢 **Green** | In the library — matched by DOI, or by an exact match on a distinctive title when the page carries no DOI. Clicking opens the item in Zotero. |
-| 🔴 **Red** | The DOI is not in the library, and the index is present and complete. |
-| 🟠 **Amber** | A title match too short or generic to be reliable (e.g. `Editorial`, `Introduction`) with no corroborating author on the page. Clicking opens the candidate item. |
-| ⚪ **Grey (dashed)** | Unknown — no usable index yet: it has never been built, or Zotero could not be reached on first use with nothing cached. Red requires a complete index, so a paper is never marked absent on a guess. |
+| 🟢 **Green** | In your Zotero library. Matched by DOI, or by an exact distinctive title when no DOI is available. Click to open the item in Zotero. |
+| 🔴 **Red** | Not in your library. Shown only when the local index is available and complete. |
+| 🟠 **Amber** | Possible title match, but the title is too short or generic to be reliable without corroborating metadata. Click to open the candidate item. |
+| ⚪ **Grey (dashed)** | Unknown — the index has not been built yet, so zotdot cannot tell whether the paper is present. Once built, the index keeps answering even if Zotero is later closed. |
 
-Hovering a dot shows its state, the matched Zotero item key, and the index age.
-
-The dots are served from the last index build, which is cached and refreshed on tab focus and every 15 seconds while the tab is visible. If Zotero becomes unreachable *after* an index exists, the dots keep their last verdict rather than reverting to grey — the tooltip's index age shows how current that verdict is. Grey therefore means "nothing to go on yet", not "Zotero is down right now".
+Hover over a dot to see its state, matched Zotero item key, and index age.
 
 ## Install
 
-The script is browser JavaScript communicating with Zotero over loopback, so it behaves the same on Linux, macOS, and Windows. The steps are identical on all three:
+zotdot is browser JavaScript that communicates with Zotero over loopback, so setup is the same on Linux, macOS, and Windows.
 
-1. Install a userscript manager — [Violentmonkey](https://violentmonkey.github.io/) or Tampermonkey, in a Chromium browser (Chrome, Edge, Brave) or Firefox.
-2. Enable Zotero's local API: Zotero → **Settings → Advanced → Allow other applications on this computer to communicate with Zotero**. Requires Zotero 7 or newer; tested against Zotero 10.
-3. Install the script — in the Violentmonkey dashboard, click the **+** and choose **New from file**, then select [`zotdot.user.js`](zotdot.user.js).
-4. Open a paper. The first paper page builds the index (a few seconds, once); subsequent pages use the cached index.
+1. Install a userscript manager such as [Violentmonkey](https://violentmonkey.github.io/) or Tampermonkey in a Chromium browser or Firefox.
+2. In Zotero, enable **Settings → Advanced → Allow other applications on this computer to communicate with Zotero**.
+3. In your userscript manager, create a new script from [`zotdot.user.js`](zotdot.user.js).
+4. Open a paper page. zotdot builds its local library index on first use and reuses it across pages.
 
-The API can be checked directly (same command on macOS, Linux, and Windows 10+):
+Requires Zotero 7 or newer; tested against Zotero 10.
+
+You can verify that Zotero's local API is reachable with:
 
 ```
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:23119/api/users/0/items/top?limit=1
 ```
 
-A `200` response indicates the API is reachable. The **zotdot: show index status** menu command reports the script's own view of the index.
+A `200` response means the API is reachable.
 
-The browser and Zotero must run on the same machine — zotdot only contacts `127.0.0.1`.
+The browser and Zotero must run on the same machine.
 
 ## How it works
 
-Zotero's local API does not provide a usable search: a query for a real DOI, a nonsense string, or an empty string all return the same page of items. zotdot therefore does not search; it mirrors the library locally.
+zotdot builds a local index of your Zotero library using Zotero's local API, then matches papers by DOI or title. The index is cached in userscript storage and incrementally refreshed while you browse, so checking a paper requires no external metadata service or per-paper network request.
 
-The library is exposed as a versioned append stream — `Last-Modified-Version` as a cursor, `since=` for deltas. An initial build pages through every top-level item (about 18 requests for ~8,600 items) and records each item's DOI, title, and author surnames in three maps. Membership is then an in-memory lookup with no network request per dot. The index is cached in userscript storage and reused across pages.
+## Supported sites
 
-The index is kept current without a page reload: it is refreshed on tab focus and on a 15-second interval while the tab is visible, using the `since=` delta check. A userscript cannot be pushed to by Zotero, so this is polling, not a live connection; a newly saved item appears within the polling interval. Deltas also prune items deleted or edited in Zotero, so a corrected DOI or title does not leave a stale match behind.
-
-## Where the dot goes
-
-On an article page, the dot is placed on the title element. Publisher-specific selectors are tried first, since some pages print the DOI only in a citation block at the foot of the article, making the title the more reliable anchor. On a search-results page, one dot is placed per result row. DOIs occurring inside reference lists are excluded.
-
-Page detection tolerates client-side rendering: on single-page applications the paper markers may appear after load, so detection polls briefly before giving up. Sites that keep the DOI out of the DOM entirely (e.g. IEEE Xplore, which carries it in an inline metadata object) have site-specific extraction.
-
-## Validated sites
-
-[`VALIDATED_SITES.md`](VALIDATED_SITES.md) lists the sites confirmed to work on a live page. It is maintained by hand and extended as sites are checked; it also records sites that are known not to work yet.
+See [`VALIDATED_SITES.md`](VALIDATED_SITES.md) for sites confirmed to work on live pages, along with known limitations.
 
 ## Menu commands
 
@@ -65,18 +57,30 @@ The userscript-manager menu exposes:
 
 **`[zotdot] Zotero unreachable: network refused`.** Zotero's local API refuses requests carrying an `Origin` header or a `Mozilla/` User-Agent, as an anti-DNS-rebinding measure. zotdot sends a non-browser User-Agent, which a userscript manager with `webRequest` permission (Violentmonkey and Tampermonkey both qualify) can set. If the refusal persists, the manager is adding an `Origin` header the script cannot strip; Firefox with Violentmonkey does not add one.
 
-## Scope
+## Privacy and scope
 
-Read-only: no writes to Zotero. Loopback only: no cloud API, no Crossref, no telemetry. "Has the paper" and "has the PDF" are distinct questions; PDF-attachment state is not tracked.
+zotdot is read-only and communicates only with Zotero at `127.0.0.1`.
 
-## Permissions
+It uses:
 
-- `@match *://*/*` — the script runs on every page so it can detect papers on any publisher or search site without a per-site allowlist. On a page that is not a paper it exits after a cheap check and does nothing further.
-- `@connect 127.0.0.1` — the only network destination is the Zotero local API on loopback; no other host is contacted.
-- `GM_xmlhttpRequest` — issues the loopback GET requests to Zotero (also required to set the non-browser User-Agent Zotero's API demands; see Troubleshooting).
-- `GM_getValue` / `GM_setValue` — store and read the cached index in userscript storage.
+- no Zotero cloud API
+- no Crossref or other external metadata service
+- no telemetry
+- no writes to your Zotero library
+
+zotdot checks whether a paper is present in the library; it does not track whether the item has a PDF attachment.
+
+<details>
+<summary><strong>Why does zotdot need these userscript permissions?</strong></summary>
+
+- `@match *://*/*` — allows zotdot to detect papers across publisher and search sites without maintaining a fixed per-site allowlist. On pages that do not contain a paper, the script exits after a lightweight check.
+- `@connect 127.0.0.1` — permits requests only to Zotero's local API.
+- `GM_xmlhttpRequest` — sends requests to Zotero over loopback and allows the non-browser User-Agent required by Zotero's local API.
+- `GM_getValue` / `GM_setValue` — store the cached local index.
 - `GM_addStyle` — inject the dot styling.
-- `GM_registerMenuCommand` — register the rebuild / status menu commands.
+- `GM_registerMenuCommand` — provides index rebuild and status commands.
+
+</details>
 
 ## License
 
