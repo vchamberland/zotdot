@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.8
+// @version      0.8.9
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,7 +34,7 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const VERSION = '0.8.8';
+  const VERSION = '0.8.9';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = `zotdot/${VERSION} (local Zotero client)`;
   // Opt-in console tracing, toggled from the userscript menu, persisted in GM
@@ -148,7 +148,11 @@
           // like a browser. Violentmonkey can set these restricted headers.
           anonymous: true,
           ...opts,
-          headers: { 'User-Agent': UA, ...(opts.headers || {}) },
+          // Zotero sends no Cache-Control/ETag/Last-Modified, so the browser is free
+          // to serve a stale /items/top or /items/trash from before a trash — which
+          // painted deleted papers green even after a rebuild. Force a revalidated
+          // (here, full) refetch every time; the hot path must read current truth.
+          headers: { 'User-Agent': UA, 'Cache-Control': 'no-cache', Pragma: 'no-cache', ...(opts.headers || {}) },
           onload: (r) => resolve(r),
           // Surface the manager's error fields so the next failure names itself.
           onerror: (r) => reject(new Error(describeNetworkError(r))),
@@ -163,7 +167,10 @@
   // Only ever reads, only ever from loopback. Never POST/PUT/DELETE, never a
   // non-loopback host — read-only membership badging is the whole contract.
   async function zoteroGet(path) {
-    const res = await gm.request({ url: `${API}${path}` });
+    // Also bust the cache via a unique param (belt-and-suspenders with the no-cache
+    // headers) — Zotero ignores unknown query params, so `_=` is inert to it.
+    const bust = `${path.includes('?') ? '&' : '?'}_=${Date.now()}`;
+    const res = await gm.request({ url: `${API}${path}${bust}` });
     if (res.status !== 200) throw new Error(`zotero ${res.status}`);
     const headers = {};
     for (const line of String(res.responseHeaders || '').trim().split(/\r?\n/)) {
