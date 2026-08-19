@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.5
+// @version      0.8.6
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -41,11 +41,12 @@
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
   // Must NOT contain "Mozilla/" — see the note in gm.request().
-  const UA = 'zotdot/0.8.5 (local Zotero client)';
-  // Bumped to 4 when the index gained a creator-surname map, used to corroborate
-  // a short title match against the authors printed on the page. An older cache
-  // has no creator data, so it is discarded and rebuilt rather than trusted.
-  const CACHE_VERSION = 4;
+  const UA = 'zotdot/0.8.6 (local Zotero client)';
+  // Bumped to 4 when the index gained a creator-surname map; bumped to 5 when the
+  // cache began recording the Zotero-Server-ID (see refreshIndex) so a cache built
+  // against a different local database is discarded rather than served for the
+  // wrong library. An older cache lacks these fields and is rebuilt, not trusted.
+  const CACHE_VERSION = 5;
 
   const K_META = 'zotdot.meta';
   const K_DOI = 'zotdot.doi';
@@ -266,6 +267,7 @@
     const creatorMap = Object.create(null);
     let cursor = 0;
     let schema = '';
+    let serverId = '';
     let pages = 0;
     // Only a short final page proves we reached the end of the library. Running
     // out of MAX_PAGES instead means the mirror is a prefix of the library, and a
@@ -279,6 +281,7 @@
       pages += 1;
       cursor = Math.max(cursor, parseInt(headers['last-modified-version'] || '0', 10) || 0);
       schema = headers['zotero-schema-version'] || schema;
+      serverId = headers['zotero-server-id'] || serverId;
 
       const items = asItemArray(JSON.parse(body));
       foldItems(items, doiMap, titleMap, creatorMap);
@@ -290,6 +293,7 @@
       cacheVersion: CACHE_VERSION,
       cursor,
       schema,
+      serverId,
       builtAt: Date.now(),
       checkedAt: Date.now(),
       pages,
@@ -313,6 +317,16 @@
     const serverVersion = parseInt(headers['last-modified-version'] || '0', 10) || meta.cursor;
     const changed = Object.keys(asVersionsObject(JSON.parse(body || '{}')));
 
+    // A different local database (a switched account, or a restored backup) can
+    // reuse the same version numbers, so `since=` would fold another library's
+    // deltas into this cache. Zotero 10 tags each database with a stable
+    // Zotero-Server-ID; when it changes, the cache belongs to a different library
+    // and must be rebuilt from scratch rather than extended.
+    const serverId = headers['zotero-server-id'] || '';
+    if (serverId && meta.serverId && serverId !== meta.serverId) {
+      return buildIndex();
+    }
+
     if (headers['zotero-schema-version'] && headers['zotero-schema-version'] !== meta.schema) {
       return buildIndex(); // schema moved under us; the cache shape is no longer trustworthy
     }
@@ -320,7 +334,7 @@
     // The library version did not move, so nothing was added, edited, or deleted.
     // This is the common case and it costs no further requests.
     if (serverVersion === meta.cursor && !changed.length) {
-      await gm.set(K_META, { ...meta, checkedAt: Date.now() });
+      await gm.set(K_META, { ...meta, checkedAt: Date.now(), serverId: meta.serverId || serverId });
       return null; // caller keeps whatever it already loaded
     }
 
@@ -358,7 +372,7 @@
     // A Zotero with no /deleted endpoint is a different case: retrying gains
     // nothing there, so the cursor advances and deletions surface on rebuild.
     const nextCursor = pruneResult === 'failed' ? meta.cursor : serverVersion;
-    const next = { ...meta, checkedAt: Date.now(), cursor: nextCursor };
+    const next = { ...meta, checkedAt: Date.now(), cursor: nextCursor, serverId: meta.serverId || serverId };
     next.doiCount = Object.keys(doiMap).length;
     next.titleCount = Object.keys(titleMap).length;
     next.creatorCount = Object.keys(creatorMap).length;

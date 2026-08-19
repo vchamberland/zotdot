@@ -9,9 +9,11 @@ A userscript that places a coloured dot next to a paper's title indicating wheth
 | 🟢 **Green** | In the library — matched by DOI, or by an exact match on a distinctive title when the page carries no DOI. Clicking opens the item in Zotero. |
 | 🔴 **Red** | The DOI is not in the library, and the index is present and complete. |
 | 🟠 **Amber** | A title match too short or generic to be reliable (e.g. `Editorial`, `Introduction`) with no corroborating author on the page. Clicking opens the candidate item. |
-| ⚪ **Grey (dashed)** | Unknown — Zotero is not running, or the index has not been built. Red is never shown in this state, since "not in the library" cannot be distinguished from "cannot check". |
+| ⚪ **Grey (dashed)** | Unknown — no usable index yet: it has never been built, or Zotero could not be reached on first use with nothing cached. Red requires a complete index, so a paper is never marked absent on a guess. |
 
 Hovering a dot shows its state, the matched Zotero item key, and the index age.
+
+The dots are served from the last index build, which is cached and refreshed on tab focus and every 15 seconds while the tab is visible. If Zotero becomes unreachable *after* an index exists, the dots keep their last verdict rather than reverting to grey — the tooltip's index age shows how current that verdict is. Grey therefore means "nothing to go on yet", not "Zotero is down right now".
 
 ## Install
 
