@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.9
+// @version      0.8.10
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,7 +34,7 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const VERSION = '0.8.9';
+  const VERSION = '0.8.10';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = `zotdot/${VERSION} (local Zotero client)`;
   // Opt-in console tracing, toggled from the userscript menu, persisted in GM
@@ -956,6 +956,9 @@
     try {
       if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('zotdot: rebuild index', async () => {
+          // Grey the dots first: a rebuild takes seconds, and leaving them green
+          // asserts a membership answer the (discarded) index can no longer back.
+          scan(null, { builtAt: 0, checkedAt: 0 });
           const built = await buildIndex();
           console.info('[zotdot] rebuilt:', built.meta);
           scan(makeIndex(built.meta, built.doiMap, built.titleMap, built.creatorMap), built.meta);
