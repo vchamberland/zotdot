@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.10
+// @version      0.8.11
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,7 +34,7 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const VERSION = '0.8.10';
+  const VERSION = '0.8.11';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = `zotdot/${VERSION} (local Zotero client)`;
   // Opt-in console tracing, toggled from the userscript menu, persisted in GM
@@ -689,6 +689,46 @@
       : null;
   }
 
+  // Verify-on-green. The DOI/title maps can hold a key whose item was later trashed
+  // and then scrolled out of the /items/trash?since= window (or the trash was
+  // emptied) — a windowed delta can never evict it, so the dot is a permanent false
+  // green pointing at a dead item (clicking it opens the wrong paper). Before a green
+  // dot is trusted, confirm the mapped item is still live; if it's gone, drop every
+  // map entry for that key and repaint absent. One request per distinct green key per
+  // page, cached for the session; a live paper stays green with no flicker.
+  const liveness = new Map(); // key -> 'live' | 'dead' | Promise
+  async function verifyLive(key) {
+    if (liveness.has(key)) return liveness.get(key);
+    const p = (async () => {
+      let verdict;
+      try {
+        const { body } = await zoteroGet(`/items/${key}?format=json`);
+        const item = JSON.parse(body);
+        verdict = (item && item.data && !item.data.deleted) ? 'live' : 'dead';
+      } catch (e) {
+        // 404 = emptied from trash = dead; any other failure = don't false-red.
+        verdict = /zotero 404/.test(e.message) ? 'dead' : 'live';
+      }
+      liveness.set(key, verdict);
+      return verdict;
+    })();
+    liveness.set(key, p);
+    return p;
+  }
+
+  function verifyAndCorrect(dot, verdict, info, index) {
+    if (!dot || verdict.state !== STATE.HIT || !verdict.key || !index) return;
+    verifyLive(verdict.key).then(async (status) => {
+      if (status !== 'dead') return;
+      evictItemKeys([verdict.key], index.doiMap, index.titleMap, index.creatorMap);
+      await gm.set(K_DOI, index.doiMap);
+      await gm.set(K_TITLE, index.titleMap);
+      await gm.set(K_CREATORS, index.creatorMap);
+      dlog('verify-on-green: key', verdict.key, 'is gone — evicted, repainting absent');
+      if (dot.isConnected) paintDot(dot, index.unusable ? STATE.UNKNOWN : STATE.MISS, { ...info, key: undefined });
+    });
+  }
+
   // ────────────────────────────────────────────────────────────── decide + paint
 
   // Maps are Object.create(null) but round-trip through JSON storage with
@@ -757,8 +797,9 @@
         const authorText = authorEl ? authorEl.textContent || '' : '';
         const verdict = decide(doi, titleText, index, authorText);
         const target = anchors.length ? anchors[0].node : titleEl;
-        placeDot(target, verdict.state, { ...info0, ...verdict },
+        const dot = placeDot(target, verdict.state, { ...info0, ...verdict },
           doi || normalizeTitle(titleText) || 'row');
+        verifyAndCorrect(dot, verdict, { ...info0, ...verdict }, index);
       }
       return rows.length;
     }
@@ -776,8 +817,9 @@
       const titleEl = articleTitleElement();
       if (titleEl) {
         const v = decide(pageDoi, title, index);
-        placeDot(titleEl, v.state, { ...info0, ...v },
+        const dot = placeDot(titleEl, v.state, { ...info0, ...v },
           pageDoi || normalizeTitle(title) || 'article-title', true);
+        verifyAndCorrect(dot, v, { ...info0, ...v }, index);
         painted += 1;
       }
     }
@@ -793,7 +835,8 @@
         // when there's no meta DOI) — lending it to a lab page's other papers is wrong.
         const ownsPageTitle = pageDoi ? a.doi === pageDoi : anchors.length === 1;
         const v = decide(a.doi, ownsPageTitle ? title : '', index);
-        placeDot(a.node, v.state, { ...info0, ...v }, a.doi);
+        const dot = placeDot(a.node, v.state, { ...info0, ...v }, a.doi);
+        verifyAndCorrect(dot, v, { ...info0, ...v }, index);
         painted += 1;
       }
     }
@@ -987,7 +1030,7 @@
     titleIsDistinctive,
     // Network/storage-backed internals, exported so a node harness can drive the
     // full sync flow against a live Zotero (they no-op safely without GM_* shims).
-    buildIndex, refreshIndex, pruneDeleted, loadIndex, gm,
+    buildIndex, refreshIndex, pruneDeleted, loadIndex, gm, verifyLive,
   };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = testable;
