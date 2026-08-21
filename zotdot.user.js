@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.11
+// @version      0.8.12
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,7 +34,7 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const VERSION = '0.8.11';
+  const VERSION = '0.8.12';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = `zotdot/${VERSION} (local Zotero client)`;
   // Opt-in console tracing, toggled from the userscript menu, persisted in GM
@@ -692,10 +692,10 @@
   // Verify-on-green. The DOI/title maps can hold a key whose item was later trashed
   // and then scrolled out of the /items/trash?since= window (or the trash was
   // emptied) — a windowed delta can never evict it, so the dot is a permanent false
-  // green pointing at a dead item (clicking it opens the wrong paper). Before a green
-  // dot is trusted, confirm the mapped item is still live; if it's gone, drop every
-  // map entry for that key and repaint absent. One request per distinct green key per
-  // page, cached for the session; a live paper stays green with no flicker.
+  // green/amber pointing at a dead item (clicking it opens the wrong paper). Before a
+  // green or amber dot is trusted, confirm the mapped item is still live; if it's
+  // gone, drop every map entry for that key and repaint absent. One request per
+  // distinct matched key per page, cached for the session; a live paper never flickers.
   const liveness = new Map(); // key -> 'live' | 'dead' | Promise
   async function verifyLive(key) {
     if (liveness.has(key)) return liveness.get(key);
@@ -716,8 +716,11 @@
     return p;
   }
 
+  // Applies to green (HIT) and amber (TITLE): both assert membership and are
+  // clickable, and both carry a mapped key that a windowed delta can leave stale.
   function verifyAndCorrect(dot, verdict, info, index) {
-    if (!dot || verdict.state !== STATE.HIT || !verdict.key || !index) return;
+    if (!dot || !index || !verdict.key) return;
+    if (verdict.state !== STATE.HIT && verdict.state !== STATE.TITLE) return;
     verifyLive(verdict.key).then(async (status) => {
       if (status !== 'dead') return;
       evictItemKeys([verdict.key], index.doiMap, index.titleMap, index.creatorMap);
