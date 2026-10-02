@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.12
+// @version      0.8.13
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,7 +34,7 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const VERSION = '0.8.12';
+  const VERSION = '0.8.13';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = `zotdot/${VERSION} (local Zotero client)`;
   // Opt-in console tracing, toggled from the userscript menu, persisted in GM
@@ -546,7 +546,8 @@
     // two selectors are from prior knowledge, unverified (Scholar captchas non-browser
     // fetches). If profile pages stay bare, these are the strings to correct.
     { host: /scholar\.google\./, rows: '#gsc_a_b .gsc_a_tr', title: '.gsc_a_at', authors: '.gs_gray', distinctive: true },
-    { host: /scholar\.google\./, rows: '#gs_res_ccl_mid .gs_r.gs_or', title: '.gs_rt', authors: '.gs_a', distinctive: true },
+    // Unscoped: Scholar Labs renders the same .gs_r.gs_or rows outside #gs_res_ccl_mid.
+    { host: /scholar\.google\./, rows: '.gs_r.gs_or', title: '.gs_rt', authors: '.gs_a', distinctive: true },
     { host: /pubmed\.ncbi\.nlm\.nih\.gov/, rows: 'article.full-docsum', title: '.docsum-title', authors: '.docsum-authors', distinctive: true },
     { host: /(bio|med)rxiv\.org/, rows: '.highwire-article-citation', title: '.highwire-cite-title', authors: '.highwire-citation-authors', distinctive: true },
     { host: /europepmc\.org/, rows: '.resultList > li', title: '.title', authors: '.authors' },
