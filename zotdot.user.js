@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.13
+// @version      0.8.14
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,7 +34,7 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const VERSION = '0.8.13';
+  const VERSION = '0.8.14';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = `zotdot/${VERSION} (local Zotero client)`;
   // Opt-in console tracing, toggled from the userscript menu, persisted in GM
@@ -542,9 +542,11 @@
 
   // Multi-result pages: one dot per row, where a single-DOI-per-page assumption breaks.
   const ROW_ADAPTERS = [
-    // Scholar profile ("citations") pages use a table, not .gs_r blocks. NOTE: these
-    // two selectors are from prior knowledge, unverified (Scholar captchas non-browser
-    // fetches). If profile pages stay bare, these are the strings to correct.
+    // Scholar citation view (view_op=view_citation): one paper with no DOI and no
+    // citation_* meta, so it is a one-row adapter matched by title. The first
+    // .gsc_oci_value is the Authors field.
+    { host: /scholar\.google\./, rows: '#gsc_vcpb', title: '#gsc_oci_title', authors: '.gsc_oci_value', distinctive: true },
+    // Scholar profile ("citations") pages use a table, not .gs_r blocks.
     { host: /scholar\.google\./, rows: '#gsc_a_b .gsc_a_tr', title: '.gsc_a_at', authors: '.gs_gray', distinctive: true },
     // Unscoped: Scholar Labs renders the same .gs_r.gs_or rows outside #gs_res_ccl_mid.
     { host: /scholar\.google\./, rows: '.gs_r.gs_or', title: '.gs_rt', authors: '.gs_a', distinctive: true },
