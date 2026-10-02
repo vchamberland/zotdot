@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.14
+// @version      0.8.15
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,7 +34,7 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const VERSION = '0.8.14';
+  const VERSION = '0.8.15';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = `zotdot/${VERSION} (local Zotero client)`;
   // Opt-in console tracing, toggled from the userscript menu, persisted in GM
@@ -73,8 +73,9 @@
     s = s.replace(/^info:doi\//, '');
     s = s.replace(/^doi:\s*/, '');
     // DOIs are routinely printed parenthesised or sentence-final; strip enclosers.
-    s = s.replace(/^[\s([{<"'‹«]+/, '');
-    s = s.replace(/[\s.,;:)\]}>"'›»]+$/, '');
+    // HAL wraps identifiers in mathematical angle brackets: ⟨10.3389/…⟩.
+    s = s.replace(/^[\s([{<"'‹«⟨〈]+/, '');
+    s = s.replace(/[\s.,;:)\]}>"'›»⟩〉]+$/, '');
     return /^10\.\d{4,9}\/\S+$/.test(s) ? s : '';
   }
 
@@ -94,7 +95,7 @@
       .slice(0, 90);
   }
 
-  const DOI_RE = /\b10\.\d{4,9}\/[^\s"'<>&]+/g;
+  const DOI_RE = /\b10\.\d{4,9}\/[^\s"'<>&⟨⟩]+/g;
 
   function findDoisInText(text) {
     if (!text) return [];
@@ -479,6 +480,13 @@
         const el = document.querySelector(sel);
         if (el && (el.textContent || '').trim()) return el;
       } catch (e) { /* malformed selector — skip */ }
+    }
+    // No h1 at all (HAL titles are an h2): take the heading whose text is the
+    // citation_title, so a section heading is never mistaken for the title.
+    const want = normalizeTitle(metaTitle(document));
+    if (!want) return null;
+    for (const h of document.querySelectorAll('h2, h3')) {
+      if (normalizeTitle(h.textContent) === want) return h;
     }
     return null;
   }
