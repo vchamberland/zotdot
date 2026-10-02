@@ -22,6 +22,7 @@ per result row).
 | Cell Press | https://www.cell.com | 2026-08-18 | |
 | eNeuro | https://www.eneuro.org | 2026-08-18 | |
 | Frontiers | https://www.frontiersin.org | 2026-08-18 | |
+| Google Scholar — citation view | https://scholar.google.com/citations?view_op=view_citation | 2026-10-02 | no DOI on the page; matched by title (v0.8.14) |
 | IEEE Xplore | https://ieeexplore.ieee.org/abstract/document/6797525 | 2026-08-18 | DOI read from inline metadata (v0.8.4) |
 | IOP Science | https://iopscience.iop.org | 2026-08-18 | |
 | MDPI | https://www.mdpi.com | 2026-08-18 | |
@@ -39,13 +40,13 @@ per result row).
 |------|-------------|----------|-------|
 | Google Scholar | https://scholar.google.ca/scholar?q=hyperscanning | 2026-08-18 | one dot per result row |
 | Google Scholar Labs | https://scholar.google.com/scholar_labs/search | 2026-10-02 | one dot per result row (v0.8.13) |
+| Google Scholar — profile | https://scholar.google.com/citations?user=fW9e_UEAAAAJ | 2026-10-02 | one dot per publication row |
 
 ## Backlog
 
 Sites checked but not working yet — deferred until further notice; diagnosis noted for whenever they're picked up.
 
 - **HAL** (`hal.science`) — single-page app; at page load it exposes neither a DOI nor `citation_*` meta in the DOM (only a server-rendered `<h1 id="title">`), so zotdot cannot identify the paper. Needs a HAL-specific adapter that reads its metadata. (as of v0.8.3)
-- **Google Scholar — citation view** (`scholar.google.*/citations?view_op=view_citation`) — the single-publication detail page, a different layout from the profile table. Scholar exposes no DOI, so it can only be matched by title (`#gsc_oci_title`). Needs a dedicated adapter; hard to verify because Scholar serves a captcha to non-browser fetches. (as of v0.8.4)
 
 ## Roadmap — not yet validated
 
@@ -53,8 +54,5 @@ Sites checked but not working yet — deferred until further notice; diagnosis n
 confirmed on a live page yet: PubMed search, bioRxiv / medRxiv search,
 Europe PMC, Semantic Scholar, ScienceDirect search.
 
-**Known unverified:** Google Scholar profile ("citations") pages — the selectors
-come from prior knowledge, not a live check, because Scholar serves a captcha to
-non-browser fetches. If profile pages stay bare, that adapter is the thing to fix.
 
 More article hosts and search surfaces will be added as they're checked.
