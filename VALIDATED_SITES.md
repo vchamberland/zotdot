@@ -38,6 +38,7 @@ per result row).
 | Site | Example URL | Verified | Notes |
 |------|-------------|----------|-------|
 | Google Scholar | https://scholar.google.ca/scholar?q=hyperscanning | 2026-08-18 | one dot per result row |
+| Google Scholar Labs | https://scholar.google.com/scholar_labs/search | 2026-10-02 | one dot per result row (v0.8.13) |
 
 ## Backlog
 
