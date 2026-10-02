@@ -23,6 +23,7 @@ per result row).
 | eNeuro | https://www.eneuro.org | 2026-08-18 | |
 | Frontiers | https://www.frontiersin.org | 2026-08-18 | |
 | Google Scholar — citation view | https://scholar.google.com/citations?view_op=view_citation | 2026-10-02 | no DOI on the page; matched by title (v0.8.14) |
+| HAL | https://hal.science/hal-05650868v1 | 2026-10-02 | title is an h2; dot found via citation_title (v0.8.15) |
 | IEEE Xplore | https://ieeexplore.ieee.org/abstract/document/6797525 | 2026-08-18 | DOI read from inline metadata (v0.8.4) |
 | IOP Science | https://iopscience.iop.org | 2026-08-18 | |
 | MDPI | https://www.mdpi.com | 2026-08-18 | |
@@ -41,12 +42,12 @@ per result row).
 | Google Scholar | https://scholar.google.ca/scholar?q=hyperscanning | 2026-08-18 | one dot per result row |
 | Google Scholar Labs | https://scholar.google.com/scholar_labs/search | 2026-10-02 | one dot per result row (v0.8.13) |
 | Google Scholar — profile | https://scholar.google.com/citations?user=fW9e_UEAAAAJ | 2026-10-02 | one dot per publication row |
+| HAL search | https://hal.science/search/index/?q=trns | 2026-10-02 | dot on each row DOI |
 
 ## Backlog
 
-Sites checked but not working yet — deferred until further notice; diagnosis noted for whenever they're picked up.
+Sites checked but not working yet. Currently empty.
 
-- **HAL** (`hal.science`) — single-page app; at page load it exposes neither a DOI nor `citation_*` meta in the DOM (only a server-rendered `<h1 id="title">`), so zotdot cannot identify the paper. Needs a HAL-specific adapter that reads its metadata. (as of v0.8.3)
 
 ## Roadmap — not yet validated
 
