@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.15
+// @version      0.8.16
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,7 +34,7 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const VERSION = '0.8.15';
+  const VERSION = '0.8.16';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = `zotdot/${VERSION} (local Zotero client)`;
   // Opt-in console tracing, toggled from the userscript menu, persisted in GM
@@ -450,12 +450,13 @@
     return '';
   }
 
-  function metaTitle(root) {
+  function metaTitle(root, fallback = true) {
     const sel = 'meta[name="citation_title" i], meta[name="dc.title" i], meta[property="og:title"]';
     for (const n of root.querySelectorAll(sel)) {
       const t = (n.getAttribute('content') || '').trim();
       if (t) return t;
     }
+    if (!fallback) return '';
     const h1 = root.querySelector('h1');
     return h1 ? h1.textContent.trim() : (document.title || '');
   }
@@ -475,18 +476,19 @@
   ];
 
   function articleTitleElement() {
+    // Prefer the paper's metadata over layout conventions. APS puts its journal
+    // banner in the first h1; other publishers use h2/h3 for the paper itself.
+    const want = normalizeTitle(metaTitle(document, false));
+    if (want) {
+      for (const h of document.querySelectorAll('h1, h2, h3')) {
+        if (normalizeTitle(h.textContent) === want) return h;
+      }
+    }
     for (const sel of ARTICLE_TITLE_SELECTORS) {
       try {
         const el = document.querySelector(sel);
         if (el && (el.textContent || '').trim()) return el;
       } catch (e) { /* malformed selector — skip */ }
-    }
-    // No h1 at all (HAL titles are an h2): take the heading whose text is the
-    // citation_title, so a section heading is never mistaken for the title.
-    const want = normalizeTitle(metaTitle(document));
-    if (!want) return null;
-    for (const h of document.querySelectorAll('h2, h3')) {
-      if (normalizeTitle(h.textContent) === want) return h;
     }
     return null;
   }
