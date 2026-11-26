@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.17
+// @version      0.8.18
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,7 +34,7 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const VERSION = '0.8.17';
+  const VERSION = '0.8.18';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = `zotdot/${VERSION} (local Zotero client)`;
   // Opt-in console tracing, toggled from the userscript menu, persisted in GM
@@ -790,6 +790,28 @@
     return { state: STATE.MISS, doi };
   }
 
+  // Nature's inline recommendations are separate papers, even on an article
+  // page. Read only each card's identity; never lend it the page's metadata.
+  function scanRecommendations(index, info) {
+    if (!/(^|\.)nature\.com$/i.test(location.hostname)) return 0;
+    let painted = 0;
+    for (const titleEl of document.querySelectorAll(
+      '[data-test="article-recommendations"] .c-article-recommendations-card__heading a'
+    )) {
+      const title = titleEl.textContent || '';
+      // Nature publishes the full DOI in its tracking label. Do not synthesize
+      // one from the URL slug: not all Nature articles use the same DOI prefix.
+      const doi = normalizeDoi(titleEl.getAttribute('data-track-label'));
+      if (!doi && !normalizeTitle(title)) continue;
+      const verdict = decide(doi, title, index);
+      const dot = placeDot(titleEl, verdict.state, { ...info, ...verdict },
+        doi || normalizeTitle(title));
+      verifyAndCorrect(dot, verdict, { ...info, ...verdict }, index);
+      painted += 1;
+    }
+    return painted;
+  }
+
   function scan(index, meta) {
     const info0 = { builtAt: meta.builtAt, checkedAt: meta.checkedAt };
     const pageDoi = metaDoi(document) || '';
@@ -857,7 +879,7 @@
       }
     }
 
-    return painted;
+    return painted + scanRecommendations(index, info0);
   }
 
   // ────────────────────────────────────────────────────────────────── bootstrap

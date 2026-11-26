@@ -51,6 +51,8 @@ Sites checked but not working yet. Currently empty.
 
 ## Roadmap — not yet validated
 
+**Nature inline recommendations (v0.8.18):** selector and all three card DOIs checked against retrieved article HTML; regression tests cover independent identities, title fallback, incomplete indexes, rescans and late-added cards. Live browser placement is not yet verified.
+
 **Search / results surfaces** zotdot carries adapters for but that aren't
 confirmed on a live page yet: PubMed search, bioRxiv / medRxiv search,
 Europe PMC, Semantic Scholar, ScienceDirect search.

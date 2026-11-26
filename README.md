@@ -42,6 +42,8 @@ zotdot builds a local index of your Zotero library using Zotero's local API, the
 
 ## Supported sites
 
+Nature article pages also badge titles in the “Similar content being viewed by others” box, using each recommendation's DOI (or title when no DOI is supplied). The main article keeps its own dot.
+
 See [`VALIDATED_SITES.md`](VALIDATED_SITES.md) for sites confirmed to work on live pages, along with known limitations.
 
 ## Menu commands
