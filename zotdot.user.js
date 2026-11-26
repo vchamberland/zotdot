@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zotdot
 // @namespace    zotdot
-// @version      0.8.16
+// @version      0.8.17
 // @description  Shows whether papers on article and search-result pages are already in your local Zotero library
 // @author       Vincent Chamberland
 // @license      MIT
@@ -34,7 +34,7 @@
   const PAGE_SIZE = 500;          // local API honors this; the web API caps at 100
   const MAX_PAGES = 40;           // hard stop, ~20k top-level items
   const REFRESH_INTERVAL_MS = 120000;
-  const VERSION = '0.8.16';
+  const VERSION = '0.8.17';
   // Must NOT contain "Mozilla/" — see the note in gm.request().
   const UA = `zotdot/${VERSION} (local Zotero client)`;
   // Opt-in console tracing, toggled from the userscript menu, persisted in GM
@@ -952,9 +952,13 @@
       }
     }
     observer = new MutationObserver(() => {
-      if (scanning) return;
-      clearTimeout(observer._t);
-      observer._t = setTimeout(rescan, 300);
+      if (scanning || observer._t != null) return;
+      // Coalesce mutations without waiting for the entire page to become quiet:
+      // publisher hydration/MathJax can otherwise postpone dot recovery for seconds.
+      observer._t = setTimeout(() => {
+        observer._t = null;
+        rescan();
+      }, 300);
     });
     observer.observe(target, observeOpts);
 
